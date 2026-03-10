@@ -42,6 +42,7 @@ The primary goal of **MasterDnsVPN** is to provide a secure, reliable, and flexi
 
 - 🚀 **Forwarding Various TCP Protocols:** Besides the highly optimized SOCKS5 integration, you can also forward other TCP-based services like `VLESS`, `ShadowSocks`, `VMESS`, etc.
 
+---
 
 # Setup Guide 🧑‍💻
 

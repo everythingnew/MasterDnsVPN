@@ -10,6 +10,15 @@ El objetivo principal de **MasterDnsVPN** es proveer un túnel seguro, confiable
 
 ---
 
+# Canal de Anuncios 📢
+Para las últimas noticias, actualizaciones y cambios relacionados con este proyecto, por favor seguí nuestro canal de Telegram: [Canal de Telegram](https://t.me/masterdnsvpn)
+
+---
+
+⭐ ¡Si utilizas o te gusta este proyecto, por favor apóyanos dándole una estrella al repositorio! ⭐
+
+---
+
 ## ✨ Características Principales y Ventajas
 
 - 🛡️ **Evasión de Censura Estricta:** Diseñado específicamente para aumentar la probabilidad de penetrar firewalls y políticas de red restrictivas que bloquean los protocolos VPN estándar.
@@ -31,10 +40,6 @@ El objetivo principal de **MasterDnsVPN** es proveer un túnel seguro, confiable
 - 🧦 **Optimización Dedicada para SOCKS5:** En versiones recientes se han aplicado optimizaciones específicas para SOCKS5. El sistema gestiona automáticamente el reenvío SOCKS5, eliminando la necesidad de instalar herramientas de proxy de terceros como X-UI o Dante. Además, configurar el protocolo en SOCKS5 elimina los paquetes de handshake SOCKS redundantes sobre el túnel, reduciendo significativamente el tráfico.
 
 - 🚀 **Reenvío de Diversos Protocolos TCP:** Además de la integración altamente optimizada con SOCKS5, también podés reenviar otros servicios basados en TCP como `VLESS`, `ShadowSocks`, `VMESS`, etc.
-
----
-
-⭐ ¡Si utilizas o te gusta este proyecto, por favor apóyanos dándole una estrella al repositorio! ⭐
 
 ---
 
