@@ -22,6 +22,15 @@ from dns_utils.config_loader import get_config_path, load_config
 from dns_utils.DNS_ENUMS import DNS_Record_Type, Packet_Type
 from dns_utils.utils import async_recvfrom, async_sendto, get_encrypt_key, getLogger
 
+
+class Socks5ConnectError(Exception):
+    """SOCKS5 connect error carrying REP code from upstream."""
+
+    def __init__(self, rep_code: int, message: str) -> None:
+        super().__init__(message)
+        self.rep_code = int(rep_code)
+
+
 # Ensure UTF-8 output for consistent logging
 try:
     if sys.stdout.encoding is not None and sys.stdout.encoding.lower() != "utf-8":
@@ -140,12 +149,73 @@ class MasterDnsVPNServer:
             Packet_Type.STREAM_RESEND: self._handle_stream_data_packet,
             Packet_Type.STREAM_DATA_ACK: self._handle_stream_data_ack_packet,
             Packet_Type.STREAM_SYN: self._handle_stream_syn_packet,
+            Packet_Type.STREAM_SYN_ACK: self._handle_control_ack_packet,
             Packet_Type.SOCKS5_SYN: self._handle_socks5_syn_packet,
+            Packet_Type.SOCKS5_SYN_ACK: self._handle_control_ack_packet,
             Packet_Type.STREAM_FIN: self._handle_stream_fin_packet,
             Packet_Type.STREAM_RST: self._handle_stream_rst_packet,
             Packet_Type.STREAM_RST_ACK: self._handle_stream_rst_ack_packet,
             Packet_Type.STREAM_FIN_ACK: self._handle_stream_fin_ack_packet,
+            Packet_Type.STREAM_KEEPALIVE: self._handle_control_request_packet,
+            Packet_Type.STREAM_KEEPALIVE_ACK: self._handle_control_ack_packet,
+            Packet_Type.STREAM_WINDOW_UPDATE: self._handle_control_request_packet,
+            Packet_Type.STREAM_WINDOW_UPDATE_ACK: self._handle_control_ack_packet,
+            Packet_Type.STREAM_PROBE: self._handle_control_request_packet,
+            Packet_Type.STREAM_PROBE_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_CONNECT_FAIL: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_CONNECT_FAIL_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_RULESET_DENIED: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_RULESET_DENIED_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_NETWORK_UNREACHABLE: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_NETWORK_UNREACHABLE_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_HOST_UNREACHABLE: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_HOST_UNREACHABLE_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_CONNECTION_REFUSED: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_CONNECTION_REFUSED_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_TTL_EXPIRED: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_TTL_EXPIRED_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_COMMAND_UNSUPPORTED: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_COMMAND_UNSUPPORTED_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_AUTH_FAILED: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_AUTH_FAILED_ACK: self._handle_control_ack_packet,
+            Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE: self._handle_control_request_packet,
+            Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE_ACK: self._handle_control_ack_packet,
             Packet_Type.PACKED_CONTROL_BLOCKS: self._handle_packed_control_blocks_packet,
+        }
+        self._control_request_ack_map = {
+            Packet_Type.STREAM_KEEPALIVE: Packet_Type.STREAM_KEEPALIVE_ACK,
+            Packet_Type.STREAM_WINDOW_UPDATE: Packet_Type.STREAM_WINDOW_UPDATE_ACK,
+            Packet_Type.STREAM_PROBE: Packet_Type.STREAM_PROBE_ACK,
+            Packet_Type.SOCKS5_CONNECT_FAIL: Packet_Type.SOCKS5_CONNECT_FAIL_ACK,
+            Packet_Type.SOCKS5_RULESET_DENIED: Packet_Type.SOCKS5_RULESET_DENIED_ACK,
+            Packet_Type.SOCKS5_NETWORK_UNREACHABLE: Packet_Type.SOCKS5_NETWORK_UNREACHABLE_ACK,
+            Packet_Type.SOCKS5_HOST_UNREACHABLE: Packet_Type.SOCKS5_HOST_UNREACHABLE_ACK,
+            Packet_Type.SOCKS5_CONNECTION_REFUSED: Packet_Type.SOCKS5_CONNECTION_REFUSED_ACK,
+            Packet_Type.SOCKS5_TTL_EXPIRED: Packet_Type.SOCKS5_TTL_EXPIRED_ACK,
+            Packet_Type.SOCKS5_COMMAND_UNSUPPORTED: Packet_Type.SOCKS5_COMMAND_UNSUPPORTED_ACK,
+            Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED: Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED_ACK,
+            Packet_Type.SOCKS5_AUTH_FAILED: Packet_Type.SOCKS5_AUTH_FAILED_ACK,
+            Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE: Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE_ACK,
+        }
+        self._control_ack_types = set(self._control_request_ack_map.values()) | {
+            Packet_Type.STREAM_SYN_ACK,
+            Packet_Type.SOCKS5_SYN_ACK,
+            Packet_Type.STREAM_FIN_ACK,
+            Packet_Type.STREAM_RST_ACK,
+        }
+        self._packable_control_types = set(self._control_ack_types)
+        self._packable_control_types.add(Packet_Type.STREAM_DATA_ACK)
+        self._socks5_rep_packet_map = {
+            0x01: Packet_Type.SOCKS5_CONNECT_FAIL,
+            0x02: Packet_Type.SOCKS5_RULESET_DENIED,
+            0x03: Packet_Type.SOCKS5_NETWORK_UNREACHABLE,
+            0x04: Packet_Type.SOCKS5_HOST_UNREACHABLE,
+            0x05: Packet_Type.SOCKS5_CONNECTION_REFUSED,
+            0x06: Packet_Type.SOCKS5_TTL_EXPIRED,
+            0x07: Packet_Type.SOCKS5_COMMAND_UNSUPPORTED,
+            0x08: Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED,
         }
 
         self.config_version = self.config.get("CONFIG_VERSION", 0.1)
@@ -481,6 +551,55 @@ class MasterDnsVPNServer:
         if self.loop:
             self.loop.create_task(self._handle_stream_syn(session_id, stream_id))
 
+    def _map_socks5_rep_to_packet(self, rep_code: int) -> int:
+        """Map SOCKS5 REP code to Packet_Type."""
+        return self._socks5_rep_packet_map.get(
+            int(rep_code), Packet_Type.SOCKS5_CONNECT_FAIL
+        )
+
+    def _map_socks5_exception_to_packet(self, exc: Exception) -> int:
+        """Best-effort exception to SOCKS5 result packet mapping."""
+        if isinstance(exc, Socks5ConnectError):
+            return self._map_socks5_rep_to_packet(exc.rep_code)
+
+        if isinstance(exc, asyncio.TimeoutError):
+            return Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE
+
+        if isinstance(exc, OSError):
+            err_no = getattr(exc, "errno", None)
+            if err_no in (111, 10061, 61):
+                return Packet_Type.SOCKS5_CONNECTION_REFUSED
+            if err_no in (113, 10065, 65):
+                return Packet_Type.SOCKS5_HOST_UNREACHABLE
+            if err_no in (101, 10051, 51):
+                return Packet_Type.SOCKS5_NETWORK_UNREACHABLE
+            if err_no in (110, 10060, 60):
+                return Packet_Type.SOCKS5_TTL_EXPIRED
+            return Packet_Type.SOCKS5_UPSTREAM_UNAVAILABLE
+
+        msg = str(exc).lower()
+        if "authentication failed" in msg:
+            return Packet_Type.SOCKS5_AUTH_FAILED
+        if "unsupported authentication method" in msg:
+            return Packet_Type.SOCKS5_AUTH_FAILED
+        if "address type" in msg:
+            return Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED
+
+        return Packet_Type.SOCKS5_CONNECT_FAIL
+
+    async def _send_socks5_error_packet(
+        self, session_id: int, stream_id: int, packet_type: int
+    ) -> None:
+        """Queue SOCKS5 error packet for client."""
+        await self._enqueue_packet(
+            session_id,
+            0,
+            stream_id,
+            0,
+            int(packet_type),
+            b"",
+        )
+
     async def _handle_socks5_syn_packet(
         self, session_id, stream_id, sn, labels, extracted_header, now_mono
     ):
@@ -581,6 +700,12 @@ class MasterDnsVPNServer:
             expected_len = 1 + 16 + 2
 
         if expected_len == -1:
+            await self._send_socks5_error_packet(
+                session_id, stream_id, Packet_Type.SOCKS5_ADDRESS_TYPE_UNSUPPORTED
+            )
+            await self.close_stream(
+                session_id, stream_id, reason="SOCKS5 address type unsupported"
+            )
             return
         if len(assembled) < expected_len:
             return
@@ -680,10 +805,59 @@ class MasterDnsVPNServer:
                     session_id, stream_id, reason="FIN acknowledged"
                 )
 
+    async def _handle_control_request_packet(
+        self, session_id, stream_id, sn, labels, extracted_header, now_mono
+    ):
+        """Handle control request packets by replying with their ACK type."""
+        _ = labels
+
+        ptype = extracted_header.get("packet_type") if extracted_header else None
+        ack_ptype = self._control_request_ack_map.get(ptype)
+        if ack_ptype is None:
+            return
+
+        await self._enqueue_packet(session_id, 0, stream_id, sn, ack_ptype, b"")
+
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+
+        stream_data = session.get("streams", {}).get(stream_id)
+        if stream_data:
+            stream_data["last_activity"] = now_mono
+
+    async def _handle_control_ack_packet(
+        self, session_id, stream_id, sn, labels, extracted_header, now_mono
+    ):
+        """Handle control ACK packets and notify stream ARQ tracker."""
+        _ = labels
+        ptype = extracted_header.get("packet_type") if extracted_header else None
+        if ptype is None:
+            return
+
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+
+        stream_data = session.get("streams", {}).get(stream_id)
+        if not stream_data:
+            return
+
+        arq = stream_data.get("arq_obj")
+        if not arq:
+            return
+
+        stream_data["last_activity"] = now_mono
+        await arq.receive_control_ack(ptype, sn)
+
     async def _handle_packed_control_blocks_packet(
         self, session_id, stream_id, sn, labels, extracted_header, now_mono
     ):
         """Handle PACKED_CONTROL_BLOCKS packets."""
+        _ = stream_id
+        _ = sn
+        _ = extracted_header
+
         session = self.sessions.get(session_id)
         if not session:
             return
@@ -692,19 +866,24 @@ class MasterDnsVPNServer:
         if not extracted_data:
             return
 
-        streams = session.get("streams", {})
         _unpack_from = self._block_packer.unpack_from
         for i in range(0, len(extracted_data), 5):
             if i + 5 > len(extracted_data):
                 break
             b_ptype, b_stream_id, b_sn = _unpack_from(extracted_data, i)
-            if b_ptype == Packet_Type.STREAM_DATA_ACK:
-                stream_data = streams.get(b_stream_id)
-                if stream_data and stream_data.get("status") == "CONNECTED":
-                    stream_data["last_activity"] = now_mono
-                    arq = stream_data.get("arq_obj")
-                    if arq:
-                        await arq.receive_ack(b_sn)
+            if b_ptype not in self._valid_packet_types:
+                continue
+
+            # Re-dispatch packed blocks through normal per-type handlers.
+            await self._dispatch_stream_packet(
+                packet_type=b_ptype,
+                session_id=session_id,
+                stream_id=b_stream_id,
+                sn=b_sn,
+                labels="",
+                extracted_header={"packet_type": b_ptype},
+                now_mono=now_mono,
+            )
 
     async def _dispatch_stream_packet(
         self, packet_type, session_id, stream_id, sn, labels, extracted_header, now_mono
@@ -894,7 +1073,8 @@ class MasterDnsVPNServer:
             )
 
             if (
-                res_ptype in (Packet_Type.STREAM_DATA_ACK, Packet_Type.SOCKS5_SYN_ACK)
+                res_ptype in self._packable_control_types
+                and not res_data
                 and session["max_packed_blocks"] > 1
             ):
                 _pack = self._block_packer.pack
@@ -914,20 +1094,22 @@ class MasterDnsVPNServer:
                         sdata = streams[sid]
                         t_queue = sdata["tx_queue"]
 
-                        while sdata["count_syn_ack"] > 0 or sdata["count_ack"] > 0:
+                        while t_queue and blocks < max_blocks:
                             if not t_queue or blocks >= max_blocks:
                                 break
-                            if t_queue[0][2] in (
-                                Packet_Type.STREAM_DATA_ACK,
-                                Packet_Type.SOCKS5_SYN_ACK,
+                            if (
+                                t_queue[0][2] in self._packable_control_types
+                                and not t_queue[0][5]
                             ):
                                 popped = heapq.heappop(t_queue)
                                 if popped[2] == Packet_Type.STREAM_DATA_ACK:
                                     sdata["track_ack"].discard(popped[4])
-                                    sdata["count_ack"] -= 1
-                                else:
+                                    if sdata["count_ack"] > 0:
+                                        sdata["count_ack"] -= 1
+                                elif popped[2] == Packet_Type.SOCKS5_SYN_ACK:
                                     sdata["track_syn_ack"].discard(popped[2])
-                                    sdata["count_syn_ack"] -= 1
+                                    if sdata["count_syn_ack"] > 0:
+                                        sdata["count_syn_ack"] -= 1
                                 packed_buffer.extend(
                                     _pack(popped[2], popped[3], popped[4])
                                 )
@@ -1029,8 +1211,9 @@ class MasterDnsVPNServer:
 
                     resp_header = await c_reader.readexactly(4)
                     if resp_header[0] != 0x05 or resp_header[1] != 0x00:
-                        raise ValueError(
-                            f"External SOCKS5 failed to connect to target. Code: {resp_header[1]}"
+                        raise Socks5ConnectError(
+                            resp_header[1],
+                            f"External SOCKS5 failed to connect to target. Code: {resp_header[1]}",
                         )
 
                     bnd_atyp = resp_header[3]
@@ -1097,6 +1280,8 @@ class MasterDnsVPNServer:
             )
 
         except Exception as e:
+            err_packet = self._map_socks5_exception_to_packet(e)
+            await self._send_socks5_error_packet(session_id, stream_id, err_packet)
             self.logger.debug(
                 f"<red>SOCKS5 target connection failed for stream {stream_id}: {e}</red>"
             )
