@@ -22,6 +22,7 @@ from typing import Any, Optional
 from dns_utils.ARQ import ARQ
 from dns_utils.compression import (
     Compression_Type,
+    SUPPORTED_COMPRESSION_TYPES,
     compress_payload,
     get_compression_name,
     is_compression_type_available,
@@ -140,6 +141,17 @@ class MasterDnsVPNServer(PacketQueueMixin):
         )
         self.max_concurrent_requests = asyncio.Semaphore(
             int(self.config.get("MAX_CONCURRENT_REQUESTS", 1000))
+        )
+
+        self.supported_upload_compression_types = (
+            self._load_supported_compression_types_config(
+                "SUPPORTED_UPLOAD_COMPRESSION_TYPES"
+            )
+        )
+        self.supported_download_compression_types = (
+            self._load_supported_compression_types_config(
+                "SUPPORTED_DOWNLOAD_COMPRESSION_TYPES"
+            )
         )
 
         # ---------------------------------------------------------
@@ -294,6 +306,85 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 f"Please update your config file to the latest version ({self.min_config_version}) for best performance and new features."
             )
 
+    def _parse_compression_value(self, value) -> Optional[int]:
+        if isinstance(value, str):
+            v = value.strip()
+            if not v:
+                return None
+            if v.isdigit():
+                return int(v)
+            name_map = {
+                "OFF": Compression_Type.OFF,
+                "ZSTD": Compression_Type.ZSTD,
+                "LZ4": Compression_Type.LZ4,
+                "ZLIB": Compression_Type.ZLIB,
+            }
+            return name_map.get(v.upper())
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    def _load_supported_compression_types_config(self, key: str) -> tuple[int, ...]:
+        raw = self.config.get(key, list(SUPPORTED_COMPRESSION_TYPES))
+
+        if isinstance(raw, str):
+            items = [x.strip() for x in raw.split(",") if x.strip()]
+        elif isinstance(raw, (list, tuple)):
+            items = list(raw)
+        else:
+            items = [raw]
+
+        allowed_set = set(SUPPORTED_COMPRESSION_TYPES)
+        valid: list[int] = []
+        for item in items:
+            parsed = self._parse_compression_value(item)
+            if parsed is None:
+                self.logger.error(f"{key}: invalid compression value '{item}' removed.")
+                continue
+
+            if parsed < 0 or parsed > 3:
+                self.logger.error(
+                    f"{key}: compression value '{parsed}' is out of allowed range 0..3 and was removed."
+                )
+                continue
+
+            if parsed not in allowed_set:
+                self.logger.error(
+                    f"{key}: compression value '{parsed}' is not in SUPPORTED_COMPRESSION_TYPES and was removed."
+                )
+                continue
+
+            if parsed not in valid:
+                valid.append(parsed)
+
+        if Compression_Type.OFF not in valid:
+            valid.insert(0, Compression_Type.OFF)
+            self.logger.warning(f"{key}: OFF(0) was missing, added automatically.")
+
+        return tuple(valid)
+
+    def _resolve_session_compression_types(
+        self,
+        requested_upload_type: int,
+        requested_download_type: int,
+    ) -> tuple[int, int]:
+        if requested_download_type not in self.supported_upload_compression_types:
+            self.logger.warning(
+                f"<yellow>Client requested upload compression <cyan>'{get_compression_name(requested_download_type)}'</cyan> "
+                f"which is not allowed by server policy. Falling back to OFF.</yellow>"
+            )
+            requested_download_type = Compression_Type.OFF
+
+        if requested_upload_type not in self.supported_download_compression_types:
+            self.logger.warning(
+                f"<yellow>Client requested download compression <cyan>'{get_compression_name(requested_upload_type)}'</cyan> "
+                f"which is not allowed by server policy. Falling back to OFF.</yellow>"
+            )
+            requested_upload_type = Compression_Type.OFF
+
+        return requested_upload_type, requested_download_type
+
     # ---------------------------------------------------------
     # Session Management
     # ---------------------------------------------------------
@@ -311,30 +402,6 @@ class MasterDnsVPNServer(PacketQueueMixin):
 
             session_id = self.free_session_ids.popleft()
             now = time.monotonic()
-            client_upload_compression_type = normalize_compression_type(
-                client_upload_compression_type
-            )
-            client_download_compression_type = normalize_compression_type(
-                client_download_compression_type
-            )
-
-            if (
-                client_upload_compression_type != Compression_Type.OFF
-                and not is_compression_type_available(client_upload_compression_type)
-            ):
-                self.logger.warning(
-                    f"Client requested unsupported upload compression type {client_upload_compression_type}. Falling back to OFF."
-                )
-                client_upload_compression_type = Compression_Type.OFF
-
-            if (
-                client_download_compression_type != Compression_Type.OFF
-                and not is_compression_type_available(client_download_compression_type)
-            ):
-                self.logger.warning(
-                    f"Client requested unsupported download compression type {client_download_compression_type}. Falling back to OFF."
-                )
-                client_download_compression_type = Compression_Type.OFF
 
             self.sessions[session_id] = {
                 "created_at": now,
@@ -353,10 +420,8 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 "download_mtu": 512,
                 "max_packed_blocks": 1,
                 "base_encode_responses": base_flag,
-                "client_upload_compression_type": int(client_upload_compression_type),
-                "client_download_compression_type": int(
-                    client_download_compression_type
-                ),
+                "client_upload_compression_type": client_upload_compression_type,
+                "client_download_compression_type": client_download_compression_type,
             }
 
             server_response_type = "Bytes"
@@ -511,6 +576,13 @@ class MasterDnsVPNServer(PacketQueueMixin):
             flag = client_payload[payload_len - 1]
             client_token = client_payload[: payload_len - 1]
 
+        (
+            client_upload_compression_type,
+            client_download_compression_type,
+        ) = self._resolve_session_compression_types(
+            client_upload_compression_type, client_download_compression_type
+        )
+
         base_encode = flag == 1
         now = time.monotonic()
 
@@ -528,14 +600,6 @@ class MasterDnsVPNServer(PacketQueueMixin):
             self.logger.debug(
                 f"<yellow>Retransmit detected from {addr}. Reusing Session {new_session_id}</yellow>"
             )
-            existing_session = self.sessions.get(new_session_id)
-            if existing_session is not None:
-                existing_session["client_upload_compression_type"] = (
-                    client_upload_compression_type
-                )
-                existing_session["client_download_compression_type"] = (
-                    client_download_compression_type
-                )
         else:
             new_session_id = await self.new_session(
                 base_encode,
@@ -549,8 +613,18 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 )
                 return None
 
+        compression_pref_byte = bytes(
+            [
+                ((client_upload_compression_type & 0x0F) << 4)
+                | (client_download_compression_type & 0x0F)
+            ]
+        )
         response_bytes = (
-            client_token + b":" + str(new_session_id).encode("ascii", errors="ignore")
+            client_token
+            + b":"
+            + str(new_session_id).encode("ascii", errors="ignore")
+            + b":"
+            + compression_pref_byte
         )
 
         return self.dns_parser.generate_vpn_response_packet(

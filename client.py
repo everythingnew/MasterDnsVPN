@@ -1973,19 +1973,62 @@ class MasterDnsVPNClient(PacketQueueMixin):
                         and parsed_header["packet_type"] == Packet_Type.SESSION_ACCEPT
                     ):
                         try:
-                            decoded_str = returned_data.decode("utf-8", errors="ignore")
-                            if ":" in decoded_str:
-                                received_token, received_sid = decoded_str.split(":", 1)
-                                if received_token == init_token.decode("ascii"):
-                                    self.session_id = int(received_sid)
-                                    self.logger.success(
-                                        f"<g>Validated Session ID: {self.session_id}</g>"
-                                    )
-                                    return True
+                            parts = returned_data.split(b":", 2)
+                            if len(parts) < 2:
+                                return False
+
+                            received_token = parts[0].decode("ascii", errors="ignore")
+                            received_sid = parts[1].decode("ascii", errors="ignore")
+                            compression_pref = 0
+                            if len(parts) >= 3:
+                                raw_comp = parts[2]
+                                if len(raw_comp) == 1:
+                                    compression_pref = raw_comp[0]
                                 else:
-                                    self.logger.warning(
-                                        "Token mismatch! Ignoring old session response."
-                                    )
+                                    comp_txt = raw_comp.decode(
+                                        "ascii", errors="ignore"
+                                    ).strip()
+                                    compression_pref = int(comp_txt or "0")
+
+                            if received_token != init_token.decode("ascii"):
+                                self.logger.warning(
+                                    "Token mismatch! Ignoring old session response."
+                                )
+                                return False
+
+                            new_upload_compression_type = normalize_compression_type(
+                                (compression_pref >> 4) & 0x0F
+                            )
+
+                            if (
+                                new_upload_compression_type
+                                != self.upload_compression_type
+                            ):
+                                self.upload_compression_type = (
+                                    new_upload_compression_type
+                                )
+                                self.logger.warning(
+                                    f"<yellow>Server requested upload compression change. New Upload Compression: <cyan>{get_compression_name(self.upload_compression_type)}</cyan></yellow>"
+                                )
+
+                            new_download_compression_type = normalize_compression_type(
+                                compression_pref & 0x0F
+                            )
+                            if (
+                                new_download_compression_type
+                                != self.download_compression_type
+                            ):
+                                self.download_compression_type = (
+                                    new_download_compression_type
+                                )
+                                self.logger.warning(
+                                    f"<yellow>Server requested download compression change. New Download Compression: <cyan>{get_compression_name(self.download_compression_type)}</cyan></yellow>"
+                                )
+                            self.session_id = int(received_sid)
+                            self.logger.success(
+                                f"<green>Validated Session ID: <cyan>{self.session_id}</cyan>, Upload Compression: <cyan>{get_compression_name(self.upload_compression_type)}</cyan>, Download Compression: <cyan>{get_compression_name(self.download_compression_type)}</cyan></green>"
+                            )
+                            return True
                         except Exception as e:
                             self.logger.error(f"Session parse error: {e}")
 
