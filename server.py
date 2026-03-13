@@ -1240,10 +1240,10 @@ class MasterDnsVPNServer(PacketQueueMixin):
         session_id: int,
         data: bytes = b"",
         labels: str = "",
-        parsed_packet: dict = None,
+        parsed_packet: Optional[dict] = None,
         addr=None,
         request_domain: str = "",
-        extracted_header: dict = None,
+        extracted_header: Optional[dict] = None,
     ) -> Optional[bytes]:
 
         pre_session_response = await self._handle_pre_session_packet(
@@ -1627,12 +1627,12 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 if packet_main_domain
                 else packet_domain
             )
-
             try:
                 extracted_header = await self._run_cpu_task(
                     self.dns_parser.extract_vpn_header_from_labels, labels
                 )
-            except Exception:
+            except Exception as e:
+                self.logger.error(f"Error extracting VPN header: {e}")
                 extracted_header = None
 
             if extracted_header:
@@ -1656,7 +1656,6 @@ class MasterDnsVPNServer(PacketQueueMixin):
                     except Exception as e:
                         self.logger.error(f"Error handling VPN packet: {e}")
                         vpn_response = None
-
         if vpn_response:
             await self.send_udp_response(vpn_response, addr)
             return
