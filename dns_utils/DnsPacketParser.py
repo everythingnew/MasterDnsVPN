@@ -572,7 +572,7 @@ class DnsPacketParser:
         )
         return b"".join((name_bytes, packed_header, rdata))
 
-    def _serialize_dns_name(self, name: str | bytes) -> bytes:
+    def _serialize_dns_name(self, name) -> bytes:
         """
         Serialize a DNS name to bytes, handling label lengths and edge cases.
         """
@@ -607,9 +607,9 @@ class DnsPacketParser:
 
     def base_encode(
         self,
-        data_bytes: bytes,
+        data_bytes,
         lowerCaseOnly: bool = True,
-        alphabet: str | None = None,
+        alphabet=None,
     ) -> str:
         if not data_bytes:
             return ""
@@ -624,7 +624,7 @@ class DnsPacketParser:
         self,
         encoded_str,
         lowerCaseOnly: bool = True,
-        alphabet: str | None = None,
+        alphabet=None,
     ) -> bytes:
         try:
             if not encoded_str:

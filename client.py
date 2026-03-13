@@ -811,9 +811,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
             f"<cyan>[Compression]</cyan> <green>Effective Compression - Upload: <yellow>{get_compression_name(up)}</yellow>, Download: <yellow>{get_compression_name(down)}</yellow></green>"
         )
 
-    async def _process_received_packet(
-        self, response_bytes: bytes, addr: Optional[tuple] = None
-    ) -> Tuple[Optional[dict], bytes]:
+    async def _process_received_packet(self, response_bytes, addr=None):
         """Parse DNS response, validate source/domain once, then extract VPN payload."""
         if not response_bytes:
             return None, b""
@@ -871,11 +869,11 @@ class MasterDnsVPNClient(PacketQueueMixin):
     async def _binary_search_mtu(
         self,
         test_callable,
-        min_mtu: int,
-        max_mtu: int,
-        min_threshold: int = 30,
-        allowed_min_mtu: int = 0,
-    ) -> int:
+        min_mtu,
+        max_mtu,
+        min_threshold=30,
+        allowed_min_mtu=0,
+    ):
         if max_mtu <= 0:
             return 0
 
@@ -960,12 +958,12 @@ class MasterDnsVPNClient(PacketQueueMixin):
 
     async def send_upload_mtu_test(
         self,
-        domain: str,
-        dns_server: str,
-        dns_port: int,
-        mtu_size: int,
-        is_retry: bool = False,
-    ) -> bool:
+        domain,
+        dns_server,
+        dns_port,
+        mtu_size,
+        is_retry=False,
+    ):
         if not is_retry:
             self.logger.debug(
                 f"<magenta>[MTU Probe]</magenta> Testing Upload MTU: <yellow>{mtu_size}</yellow> bytes via <cyan>{dns_server}</cyan>"
@@ -1031,13 +1029,13 @@ class MasterDnsVPNClient(PacketQueueMixin):
 
     async def send_download_mtu_test(
         self,
-        domain: str,
-        dns_server: str,
-        dns_port: int,
-        mtu_size: int,
-        up_mtu_bytes: int,
-        is_retry: bool = False,
-    ) -> bool:
+        domain,
+        dns_server,
+        dns_port,
+        mtu_size,
+        up_mtu_bytes,
+        is_retry=False,
+    ):
         if not is_retry:
             self.logger.debug(
                 f"<magenta>[MTU Probe]</magenta> Testing Download MTU: <yellow>{mtu_size}</yellow> bytes via <cyan>{dns_server}</cyan>"
@@ -1107,9 +1105,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
         )
         return False
 
-    async def test_upload_mtu_size(
-        self, domain: str, dns_server: str, dns_port: int, default_mtu: int
-    ) -> tuple:
+    async def test_upload_mtu_size(self, domain, dns_server, dns_port, default_mtu):
         try:
             self.logger.debug(f"<cyan>[MTU]</cyan> Testing upload MTU for {domain}")
             mtu_char_len, mtu_bytes = self.dns_parser.calculate_upload_mtu(
@@ -1144,12 +1140,12 @@ class MasterDnsVPNClient(PacketQueueMixin):
 
     async def test_download_mtu_size(
         self,
-        domain: str,
-        dns_server: str,
-        dns_port: int,
-        default_mtu: int,
-        up_mtu_bytes: int,
-    ) -> tuple:
+        domain,
+        dns_server,
+        dns_port,
+        default_mtu,
+        up_mtu_bytes,
+    ):
         try:
             self.logger.debug(f"<cyan>[MTU]</cyan> Testing download MTU for {domain}")
 
@@ -3609,7 +3605,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
         except asyncio.TimeoutError:
             pass
 
-    def _signal_handler(self, signum, frame=None) -> None:
+    def _signal_handler(self, signum, frame=None):
         """Handle termination signals to stop the client gracefully (Thread-Safe)."""
 
         if getattr(self, "_force_quit_flag", False):

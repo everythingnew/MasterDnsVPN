@@ -2410,7 +2410,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         self.logger.info("<magenta>MasterDnsVPN Server stopped.</magenta>")
         os._exit(0)
 
-    def _signal_handler(self, signum: int, frame: Optional[Any] = None) -> None:
+    def _signal_handler(self, signum, frame=None):
         """
         Handle termination signals for graceful shutdown.
         """
