@@ -762,7 +762,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_id,
                 sn,
                 Packet_Type.STREAM_FIN_ACK,
-                b"FA" + os.urandom(4),
+                b"",
             )
             return True
         if packet_type == Packet_Type.STREAM_RST:
@@ -772,7 +772,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_id,
                 sn,
                 Packet_Type.STREAM_RST_ACK,
-                b"RA" + os.urandom(4),
+                b"",
             )
             return True
         if packet_type in (
@@ -786,7 +786,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_id,
                 0,
                 Packet_Type.STREAM_RST,
-                b"RS" + os.urandom(4),
+                b"",
             )
             return True
         return False
@@ -976,7 +976,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         fragment_id: int | None = None,
     ) -> None:
         """Queue SOCKS5 error packet for client."""
-        payload = b"SE" + os.urandom(4)
+        payload = b""
         await self._queue_and_cache_response(
             session_id,
             stream_id,
@@ -1246,7 +1246,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_id,
                 sn,
                 Packet_Type.STREAM_FIN_ACK,
-                b"FA" + os.urandom(4),
+                b"",
             )
             return
 
@@ -1262,7 +1262,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_id,
                 sn,
                 Packet_Type.STREAM_FIN_ACK,
-                b"FA" + os.urandom(4),
+                b"",
             )
             return
 
@@ -1282,7 +1282,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
             stream_id,
             sn,
             Packet_Type.STREAM_RST_ACK,
-            b"RA" + os.urandom(4),
+            b"",
         )
 
         session = self.sessions.get(session_id)
@@ -1354,9 +1354,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
         if ack_ptype is None:
             return
 
-        await self._enqueue_packet(
-            session_id, 0, stream_id, sn, ack_ptype, b"RA" + os.urandom(4)
-        )
+        await self._enqueue_packet(session_id, 0, stream_id, sn, ack_ptype, b"")
 
         session = self.sessions.get(session_id)
         if not session:
@@ -1951,7 +1949,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_data,
                 "socks",
                 packet_type=Packet_Type.SOCKS5_SYN_ACK,
-                payload=b"SCAC:" + os.urandom(4),
+                payload=b"",
                 priority=2,
                 sequence_num=0,
             )
@@ -2384,14 +2382,12 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_data["rst_acked"] = False
                 stream_data["rst_seq_sent"] = rst_sn
 
-                rst_data = b"RST:" + os.urandom(4)
                 await self._enqueue_packet(
-                    session_id, 0, stream_id, rst_sn, Packet_Type.STREAM_RST, rst_data
+                    session_id, 0, stream_id, rst_sn, Packet_Type.STREAM_RST, b""
                 )
             elif not abortive:
-                fin_data = b"FIN:" + os.urandom(4)
                 await self._enqueue_packet(
-                    session_id, 1, stream_id, 0, Packet_Type.STREAM_FIN, fin_data
+                    session_id, 1, stream_id, 0, Packet_Type.STREAM_FIN, b""
                 )
 
         pending_tx = stream_data.get("tx_queue", [])
@@ -2531,7 +2527,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                 stream_id,
                 0,
                 Packet_Type.STREAM_RST,
-                b"RST:" + os.urandom(4),
+                b"",
             )
             return
 
@@ -2601,14 +2597,13 @@ class MasterDnsVPNServer(PacketQueueMixin):
             stream_data["arq_obj"] = stream
             stream_data["status"] = "CONNECTED"
 
-            syn_data = b"SYA:" + os.urandom(4)
             await self._queue_and_cache_response(
                 session_id,
                 stream_id,
                 stream_data,
                 "stream",
                 packet_type=Packet_Type.STREAM_SYN_ACK,
-                payload=syn_data,
+                payload=b"",
                 priority=2,
                 sequence_num=syn_sn,
             )
@@ -2708,14 +2703,13 @@ class MasterDnsVPNServer(PacketQueueMixin):
                                 )
 
                                 if rst_sn is not None:
-                                    rst_data = b"RST:" + os.urandom(4)
                                     await self._enqueue_packet(
                                         session_id,
                                         0,
                                         sid,
                                         rst_sn,
                                         Packet_Type.STREAM_RST,
-                                        rst_data,
+                                        b"",
                                     )
 
                             elif (
@@ -2732,7 +2726,6 @@ class MasterDnsVPNServer(PacketQueueMixin):
                                 stream_data["fin_retries"] = (
                                     stream_data.get("fin_retries", 0) + 1
                                 )
-                                fin_data = b"FIN:" + os.urandom(4)
 
                                 fin_sn = 0
                                 if (
@@ -2748,7 +2741,7 @@ class MasterDnsVPNServer(PacketQueueMixin):
                                     sid,
                                     fin_sn,
                                     Packet_Type.STREAM_FIN,
-                                    fin_data,
+                                    b"",
                                 )
 
                     closed_ids = [
