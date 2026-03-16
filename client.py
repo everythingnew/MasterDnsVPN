@@ -265,6 +265,7 @@ class MasterDnsVPNClient(PacketQueueMixin):
             lambda: {
                 "pending": deque(),
                 "events": deque(),
+                "next_seq": 0,
             }
         )
         self.runtime_disabled_servers = {}
@@ -739,7 +740,16 @@ class MasterDnsVPNClient(PacketQueueMixin):
     def _track_server_send(self, server_key: str) -> None:
         now = time.monotonic()
         h = self.server_health[server_key]
-        h["pending"].append(now)
+        seq = int(h.get("next_seq", 0))
+        h["next_seq"] = seq + 1
+        h["pending"].append(
+            {
+                "seq": seq,
+                "sent_time": now,
+                "timed_out": False,
+                "timeout_event": None,
+            }
+        )
 
     def _track_server_success(self, server_key: str) -> float | None:
         now = time.monotonic()
@@ -749,8 +759,17 @@ class MasterDnsVPNClient(PacketQueueMixin):
             self._prune_server_health_window(server_key, now)
             return None
 
-        sent_time = pending.popleft()
-        h["events"].append((now, True))
+        entry = pending.popleft()
+        sent_time = float(entry.get("sent_time", now))
+        timeout_event = entry.get("timeout_event")
+        if (
+            entry.get("timed_out")
+            and isinstance(timeout_event, list)
+            and len(timeout_event) >= 2
+        ):
+            timeout_event[1] = True
+        else:
+            h["events"].append([now, True])
         self._prune_server_health_window(server_key, now)
         return sent_time
 
@@ -767,13 +786,31 @@ class MasterDnsVPNClient(PacketQueueMixin):
     def _collect_expired_pending_timeouts(self) -> None:
         now = time.monotonic()
         timeout_age = max(0.2, self.timeout)
+        late_response_grace = max(timeout_age * 3.0, 1.0)
         for server_key, h in list(self.server_health.items()):
             pending = h["pending"]
             events = h["events"]
             expire_before = now - timeout_age
-            while pending and pending[0] <= expire_before:
+            for entry in pending:
+                sent_time = float(entry.get("sent_time", now))
+                if sent_time > expire_before:
+                    break
+                if entry.get("timed_out"):
+                    continue
+                timeout_event = [now, False]
+                entry["timed_out"] = True
+                entry["timeout_event"] = timeout_event
+                events.append(timeout_event)
+
+            finalize_before = now - late_response_grace
+            while pending:
+                head = pending[0]
+                if not head.get("timed_out"):
+                    break
+                if float(head.get("sent_time", now)) > finalize_before:
+                    break
                 pending.popleft()
-                events.append((now, False))
+
             self._prune_server_health_window(server_key, now)
             if not pending and not events:
                 self.server_health.pop(server_key, None)
