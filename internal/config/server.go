@@ -12,36 +12,49 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
 type ServerConfig struct {
-	UDPHost               string `toml:"UDP_HOST"`
-	UDPPort               int    `toml:"UDP_PORT"`
-	SocketBufferSize      int    `toml:"SOCKET_BUFFER_SIZE"`
-	MaxConcurrentRequests int    `toml:"MAX_CONCURRENT_REQUESTS"`
-	DNSRequestWorkers     int    `toml:"DNS_REQUEST_WORKERS"`
-	MaxPacketSize         int    `toml:"MAX_PACKET_SIZE"`
-	LogLevel              string `toml:"LOG_LEVEL"`
+	UDPHost               string  `toml:"UDP_HOST"`
+	UDPPort               int     `toml:"UDP_PORT"`
+	UDPReaders            int     `toml:"UDP_READERS"`
+	SocketBufferSize      int     `toml:"SOCKET_BUFFER_SIZE"`
+	MaxConcurrentRequests int     `toml:"MAX_CONCURRENT_REQUESTS"`
+	DNSRequestWorkers     int     `toml:"DNS_REQUEST_WORKERS"`
+	MaxPacketSize         int     `toml:"MAX_PACKET_SIZE"`
+	DropLogIntervalSecs   float64 `toml:"DROP_LOG_INTERVAL_SECONDS"`
+	LogLevel              string  `toml:"LOG_LEVEL"`
 }
 
 func defaultServerConfig() ServerConfig {
-	workers := runtime.NumCPU() * 2
-	if workers < 2 {
-		workers = 2
+	workers := runtime.NumCPU()
+	if workers < 1 {
+		workers = 1
 	}
-	if workers > 32 {
-		workers = 32
+	if workers > 16 {
+		workers = 16
+	}
+
+	readers := runtime.NumCPU() / 2
+	if readers < 1 {
+		readers = 1
+	}
+	if readers > 4 {
+		readers = 4
 	}
 
 	return ServerConfig{
 		UDPHost:               "0.0.0.0",
 		UDPPort:               53,
+		UDPReaders:            readers,
 		SocketBufferSize:      8 * 1024 * 1024,
 		MaxConcurrentRequests: 4096,
 		DNSRequestWorkers:     workers,
 		MaxPacketSize:         4096,
+		DropLogIntervalSecs:   2.0,
 		LogLevel:              "INFO",
 	}
 }
@@ -67,6 +80,9 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 	if cfg.UDPPort <= 0 || cfg.UDPPort > 65535 {
 		return cfg, fmt.Errorf("invalid UDP_PORT: %d", cfg.UDPPort)
 	}
+	if cfg.UDPReaders <= 0 {
+		cfg.UDPReaders = defaultServerConfig().UDPReaders
+	}
 	if cfg.SocketBufferSize <= 0 {
 		cfg.SocketBufferSize = 8 * 1024 * 1024
 	}
@@ -79,6 +95,9 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 	if cfg.MaxPacketSize <= 0 {
 		cfg.MaxPacketSize = 4096
 	}
+	if cfg.DropLogIntervalSecs <= 0 {
+		cfg.DropLogIntervalSecs = 2.0
+	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "INFO"
 	}
@@ -88,4 +107,8 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 
 func (c ServerConfig) Address() string {
 	return fmt.Sprintf("%s:%d", c.UDPHost, c.UDPPort)
+}
+
+func (c ServerConfig) DropLogInterval() time.Duration {
+	return time.Duration(c.DropLogIntervalSecs * float64(time.Second))
 }

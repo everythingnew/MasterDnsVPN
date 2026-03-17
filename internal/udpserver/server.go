@@ -12,19 +12,23 @@ import (
 	"errors"
 	"net"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	"masterdnsvpn-go/internal/config"
 	"masterdnsvpn-go/internal/logger"
 )
 
 type Server struct {
-	cfg config.ServerConfig
-	log *logger.Logger
+	cfg             config.ServerConfig
+	log             *logger.Logger
+	packetPool      sync.Pool
+	droppedPackets  atomic.Uint64
+	lastDropLogUnix atomic.Int64
 }
 
 type request struct {
-	data []byte
+	buf  []byte
+	size int
 	addr *net.UDPAddr
 }
 
@@ -32,6 +36,11 @@ func New(cfg config.ServerConfig, log *logger.Logger) *Server {
 	return &Server{
 		cfg: cfg,
 		log: log,
+		packetPool: sync.Pool{
+			New: func() any {
+				return make([]byte, cfg.MaxPacketSize)
+			},
+		},
 	}
 }
 
@@ -53,72 +62,85 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	s.log.Infof(
-		"<green>udp listener ready</green> addr=<cyan>%s</cyan> workers=<magenta>%d</magenta> queue=<magenta>%d</magenta>",
+		"<green>udp listener ready</green> addr=<cyan>%s</cyan> readers=<magenta>%d</magenta> workers=<magenta>%d</magenta> queue=<magenta>%d</magenta>",
 		s.cfg.Address(),
+		s.cfg.UDPReaders,
 		s.cfg.DNSRequestWorkers,
 		s.cfg.MaxConcurrentRequests,
 	)
 
 	reqCh := make(chan request, s.cfg.MaxConcurrentRequests)
-	var wg sync.WaitGroup
+	var workerWG sync.WaitGroup
 
 	for i := 0; i < s.cfg.DNSRequestWorkers; i++ {
-		wg.Add(1)
+		workerWG.Add(1)
 		go func(workerID int) {
-			defer wg.Done()
+			defer workerWG.Done()
 			s.worker(ctx, conn, reqCh, workerID)
 		}(i + 1)
 	}
 
-	readErr := make(chan error, 1)
 	go func() {
-		readErr <- s.readLoop(ctx, conn, reqCh)
+		<-ctx.Done()
+		_ = conn.Close()
 	}()
 
-	select {
-	case <-ctx.Done():
-		_ = conn.SetReadDeadline(time.Now())
-		close(reqCh)
-		wg.Wait()
+	readErrCh := make(chan error, s.cfg.UDPReaders)
+	var readerWG sync.WaitGroup
+	for i := 0; i < s.cfg.UDPReaders; i++ {
+		readerWG.Add(1)
+		go func(readerID int) {
+			defer readerWG.Done()
+			if err := s.readLoop(ctx, conn, reqCh, readerID); err != nil {
+				select {
+				case readErrCh <- err:
+				default:
+				}
+			}
+		}(i + 1)
+	}
+
+	readerWG.Wait()
+	close(reqCh)
+	workerWG.Wait()
+
+	if ctx.Err() != nil {
 		return ctx.Err()
-	case err := <-readErr:
-		close(reqCh)
-		wg.Wait()
-		if errors.Is(err, context.Canceled) {
-			return err
-		}
+	}
+
+	select {
+	case err := <-readErrCh:
 		return err
+	default:
+		return nil
 	}
 }
 
-func (s *Server) readLoop(ctx context.Context, conn *net.UDPConn, reqCh chan<- request) error {
-	buffer := make([]byte, s.cfg.MaxPacketSize)
-
+func (s *Server) readLoop(ctx context.Context, conn *net.UDPConn, reqCh chan<- request, readerID int) error {
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		buffer := s.packetPool.Get().([]byte)
 		n, addr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				select {
-				case <-ctx.Done():
-					return context.Canceled
-				default:
-					continue
-				}
+			s.packetPool.Put(buffer)
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
 			}
+			s.log.Debugf(
+				"<magenta>reader</magenta> <cyan>%d</cyan> read error: <yellow>%v</yellow>",
+				readerID,
+				err,
+			)
 			return err
 		}
 
-		packet := append([]byte(nil), buffer[:n]...)
 		select {
-		case reqCh <- request{data: packet, addr: addr}:
+		case reqCh <- request{buf: buffer, size: n, addr: addr}:
 		case <-ctx.Done():
-			return context.Canceled
+			s.packetPool.Put(buffer)
+			return nil
 		default:
-			s.log.Warnf(
-				"<yellow>request queue full</yellow>, dropping packet from <cyan>%s</cyan>",
-				addr.String(),
-			)
+			s.packetPool.Put(buffer)
+			s.onDrop(addr)
 		}
 	}
 }
@@ -133,8 +155,10 @@ func (s *Server) worker(ctx context.Context, conn *net.UDPConn, reqCh <-chan req
 				return
 			}
 
-			response := s.handlePacket(req.data)
+			payload := req.buf[:req.size]
+			response := s.handlePacket(payload)
 			if len(response) == 0 {
+				s.packetPool.Put(req.buf)
 				continue
 			}
 
@@ -145,11 +169,38 @@ func (s *Server) worker(ctx context.Context, conn *net.UDPConn, reqCh <-chan req
 					req.addr.String(),
 					err,
 				)
+				s.packetPool.Put(req.buf)
+				continue
 			}
+
+			s.packetPool.Put(req.buf)
 		}
 	}
 }
 
 func (s *Server) handlePacket(packet []byte) []byte {
 	return packet
+}
+
+func (s *Server) onDrop(addr *net.UDPAddr) {
+	total := s.droppedPackets.Add(1)
+
+	now := logger.NowUnixNano()
+	last := s.lastDropLogUnix.Load()
+	interval := s.cfg.DropLogInterval().Nanoseconds()
+	if interval <= 0 {
+		interval = 2_000_000_000
+	}
+	if now-last < interval {
+		return
+	}
+	if !s.lastDropLogUnix.CompareAndSwap(last, now) {
+		return
+	}
+
+	s.log.Warnf(
+		"<yellow>request queue overloaded</yellow> total_dropped=<magenta>%d</magenta> last_remote=<cyan>%s</cyan>",
+		total,
+		addr.String(),
+	)
 }

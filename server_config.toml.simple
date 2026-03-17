@@ -12,6 +12,9 @@
 UDP_HOST = "0.0.0.0"
 UDP_PORT = 53
 
+# Number of concurrent UDP read loops on the same socket.
+UDP_READERS = 2
+
 # UDP socket buffer size in bytes.
 SOCKET_BUFFER_SIZE = 8388608
 
@@ -23,6 +26,9 @@ DNS_REQUEST_WORKERS = 8
 
 # Maximum inbound UDP packet size to read in one operation.
 MAX_PACKET_SIZE = 4096
+
+# Minimum interval between overload/drop warning logs.
+DROP_LOG_INTERVAL_SECONDS = 2.0
 
 # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL = "INFO"

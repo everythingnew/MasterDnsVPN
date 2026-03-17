@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type Logger struct {
@@ -135,4 +136,8 @@ func renderColorTags(text string) string {
 			return tag
 		}
 	})
+}
+
+func NowUnixNano() int64 {
+	return time.Now().UnixNano()
 }
