@@ -1,0 +1,28 @@
+# ==============================================================================
+# MasterDnsVPN Go Server Configuration
+# Author: MasterkinG32
+# Github: https://github.com/masterking32
+# Year: 2026
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1) DNS Listener & UDP Socket
+# ------------------------------------------------------------------------------
+
+UDP_HOST = "0.0.0.0"
+UDP_PORT = 53
+
+# UDP socket buffer size in bytes.
+SOCKET_BUFFER_SIZE = 8388608
+
+# Maximum number of queued UDP requests waiting for workers.
+MAX_CONCURRENT_REQUESTS = 4096
+
+# Number of worker goroutines handling requests concurrently.
+DNS_REQUEST_WORKERS = 8
+
+# Maximum inbound UDP packet size to read in one operation.
+MAX_PACKET_SIZE = 4096
+
+# Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_LEVEL = "INFO"
