@@ -17,12 +17,14 @@ import (
 
 	"masterdnsvpn-go/internal/config"
 	"masterdnsvpn-go/internal/dnsparser"
+	"masterdnsvpn-go/internal/domainmatcher"
 	"masterdnsvpn-go/internal/logger"
 )
 
 type Server struct {
 	cfg             config.ServerConfig
 	log             *logger.Logger
+	domainMatcher   *domainmatcher.Matcher
 	packetPool      sync.Pool
 	droppedPackets  atomic.Uint64
 	lastDropLogUnix atomic.Int64
@@ -36,8 +38,9 @@ type request struct {
 
 func New(cfg config.ServerConfig, log *logger.Logger) *Server {
 	return &Server{
-		cfg: cfg,
-		log: log,
+		cfg:           cfg,
+		log:           log,
+		domainMatcher: domainmatcher.New(cfg.Domain, cfg.MinVPNLabelLength),
 		packetPool: sync.Pool{
 			New: func() any {
 				return make([]byte, cfg.MaxPacketSize)
@@ -255,15 +258,56 @@ func (s *Server) handlePacket(packet []byte) []byte {
 		return nil
 	}
 
+	decision := s.domainMatcher.Match(parsed)
+	switch decision.Action {
+	case domainmatcher.ActionFormatError:
+		response, responseErr := dnsparser.BuildFormatErrorResponse(packet)
+		if responseErr == nil {
+			s.log.Debugf(
+				"[DNS] <yellow>Malformed DNS Question</yellow> id=<cyan>%d</cyan> reason=<magenta>%s</magenta> action=<green>formerr</green>",
+				parsed.Header.ID,
+				decision.Reason,
+			)
+			return response
+		}
+		return nil
+	case domainmatcher.ActionNoData:
+		response, responseErr := dnsparser.BuildEmptyNoErrorResponseFromLite(packet, parsed)
+		if responseErr == nil {
+			s.log.Debugf(
+				"[DNS] <yellow>Question Skipped</yellow> id=<cyan>%d</cyan> reason=<magenta>%s</magenta> domain=<yellow>%s</yellow> qtype=<magenta>%d</magenta> action=<green>nodata</green>",
+				parsed.Header.ID,
+				decision.Reason,
+				decision.RequestName,
+				decision.QuestionType,
+			)
+			return response
+		}
+		return nil
+	case domainmatcher.ActionProcess:
+		s.log.Debugf(
+			"[VPN] <green>Accepted DNS Tunnel Candidate</green> id=<cyan>%d</cyan> domain=<yellow>%s</yellow> base=<cyan>%s</cyan> labels=<magenta>%s</magenta>",
+			parsed.Header.ID,
+			decision.RequestName,
+			decision.BaseDomain,
+			decision.Labels,
+		)
+		return s.handleTunnelCandidate(packet, parsed, decision)
+	default:
+		return nil
+	}
+}
+
+func (s *Server) allowDNSPacket(_ dnsparser.LitePacket) bool {
+	return true
+}
+
+func (s *Server) handleTunnelCandidate(packet []byte, parsed dnsparser.LitePacket, _ domainmatcher.Decision) []byte {
 	response, responseErr := dnsparser.BuildEmptyNoErrorResponseFromLite(packet, parsed)
 	if responseErr != nil {
 		return nil
 	}
 	return response
-}
-
-func (s *Server) allowDNSPacket(_ dnsparser.LitePacket) bool {
-	return true
 }
 
 func (s *Server) onDrop(addr *net.UDPAddr) {

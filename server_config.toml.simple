@@ -31,6 +31,9 @@ MAX_PACKET_SIZE = 65535
 # Minimum interval between overload/drop warning logs.
 DROP_LOG_INTERVAL_SECONDS = 2.0
 
+# Allowed tunnel domains.
+DOMAIN = ["a.com", "c.b.com", "cc.com"]
+
 # Encryption method:
 # 0=None, 1=XOR, 2=ChaCha20, 3=AES-128-GCM, 4=AES-192-GCM, 5=AES-256-GCM
 DATA_ENCRYPTION_METHOD = 1

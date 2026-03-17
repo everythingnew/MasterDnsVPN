@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"masterdnsvpn-go/internal/config"
@@ -46,6 +47,17 @@ func main() {
 		cfg.UDPReaders,
 		cfg.DNSRequestWorkers,
 	)
+	if len(cfg.Domain) > 0 {
+		log.Infof(
+			"[*] <green>Allowed Domains</green>: <cyan>%s</cyan>  |  Min VPN Label Length: <magenta>%d</magenta>",
+			strings.Join(cfg.Domain, ", "),
+			cfg.MinVPNLabelLength,
+		)
+	} else {
+		log.Warnf(
+			"[!] <yellow>No Allowed Domains Configured</yellow>  |  All DNS questions will currently fall back to <green>NODATA</green>",
+		)
+	}
 	log.Infof(
 		"[*] <green>Encryption Method</green>: <cyan>%s</cyan> <gray>(id=%d)</gray>",
 		keyInfo.MethodName,
