@@ -86,11 +86,8 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 	}
 
 	header := parseHeader(questionPacket)
-	questionBytes, questionCount := extractQuestionSection(questionPacket, header)
-	optRecords := [][]byte(nil)
-	if len(questionBytes) > 0 || header.QDCount == 0 {
-		optRecords = extractOPTRecordsFromOffset(questionPacket, header, dnsHeaderSize+len(questionBytes))
-	}
+	questionBytes, questionCount, questionEndOffset := extractQuestionSection(questionPacket, header)
+	optRecords, optRecordsLen := extractOPTRecordsFromOffset(questionPacket, header, questionEndOffset)
 
 	nameBytes, err := encodeDNSNameStrict(answerName)
 	if err != nil {
@@ -107,7 +104,7 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 		answerLen += nameLen + 10 + len(payload)
 	}
 
-	response := make([]byte, dnsHeaderSize+len(questionBytes)+answerLen+rawRecordsLen(optRecords))
+	response := make([]byte, dnsHeaderSize+len(questionBytes)+answerLen+optRecordsLen)
 	binary.BigEndian.PutUint16(response[0:2], header.ID)
 	binary.BigEndian.PutUint16(response[2:4], buildResponseFlags(header.Flags, Enums.DNSR_CODE_NO_ERROR))
 	binary.BigEndian.PutUint16(response[4:6], questionCount)
@@ -180,18 +177,15 @@ func buildSingleTXTResponsePacket(questionPacket []byte, answerName string, answ
 	}
 
 	header := parseHeader(questionPacket)
-	questionBytes, questionCount := extractQuestionSection(questionPacket, header)
-	optRecords := [][]byte(nil)
-	if len(questionBytes) > 0 || header.QDCount == 0 {
-		optRecords = extractOPTRecordsFromOffset(questionPacket, header, dnsHeaderSize+len(questionBytes))
-	}
+	questionBytes, questionCount, questionEndOffset := extractQuestionSection(questionPacket, header)
+	optRecords, optRecordsLen := extractOPTRecordsFromOffset(questionPacket, header, questionEndOffset)
 
 	nameBytes, err := encodeDNSNameStrict(answerName)
 	if err != nil {
 		return nil, err
 	}
 
-	response := make([]byte, dnsHeaderSize+len(questionBytes)+len(nameBytes)+10+len(answerPayload)+rawRecordsLen(optRecords))
+	response := make([]byte, dnsHeaderSize+len(questionBytes)+len(nameBytes)+10+len(answerPayload)+optRecordsLen)
 	binary.BigEndian.PutUint16(response[0:2], header.ID)
 	binary.BigEndian.PutUint16(response[2:4], buildResponseFlags(header.Flags, Enums.DNSR_CODE_NO_ERROR))
 	binary.BigEndian.PutUint16(response[4:6], questionCount)
@@ -333,7 +327,7 @@ func buildTXTAnswerChunks(rawFrame []byte, baseEncode bool) ([][]byte, error) {
 		return appendRawTXTAnswerChunks(chunks, header.Payload, maxChunk0Data, maxChunkNData), nil
 	}
 
-	chunks = append(chunks, appendLengthPrefixedTXT(baseCodec.EncodeRawBase64(rawChunk0)))
+	chunks = append(chunks, appendLengthPrefixedBase64TXT(rawChunk0))
 	return appendBase64TXTAnswerChunks(chunks, header.Payload, maxChunk0Data, maxChunkNData), nil
 }
 
@@ -382,23 +376,23 @@ func appendLengthPrefixedTXT(data []byte) []byte {
 	}
 
 	parts := 1 + (len(data)-1)/255
-	out := make([]byte, 0, len(data)+parts)
+	out := make([]byte, len(data)+parts)
+	writeOffset := 0
 	for start := 0; start < len(data); start += 255 {
-		end := start + 255
-		if end > len(data) {
-			end = len(data)
-		}
-		out = append(out, byte(end-start))
-		out = append(out, data[start:end]...)
+		end := min(start+255, len(data))
+		out[writeOffset] = byte(end - start)
+		writeOffset++
+		writeOffset += copy(out[writeOffset:], data[start:end])
 	}
 	return out
 }
 
 func appendLengthPrefixedBase64TXT(data []byte) []byte {
 	encodedLen := baseCodec.EncodedRawBase64Len(len(data))
-	out := make([]byte, 1, 1+encodedLen)
+	out := make([]byte, 1+encodedLen)
 	out[0] = byte(encodedLen)
-	return baseCodec.EncodeRawBase64To(out, data)
+	baseCodec.EncodeRawBase64Into(out[1:], data)
+	return out
 }
 
 func extractTXTAnswerPayloads(parsed Packet) [][]byte {
@@ -543,14 +537,19 @@ func encodeDNSNameStrict(name string) ([]byte, error) {
 		return nil, ErrInvalidName
 	}
 
-	labels := strings.Split(name, ".")
 	encoded := make([]byte, 0, len(name)+2)
-	for _, label := range labels {
-		if label == "" || len(label) > maxDNSLabelLen {
+	labelStart := 0
+	for i := 0; i <= len(name); i++ {
+		if i < len(name) && name[i] != '.' {
+			continue
+		}
+		labelLen := i - labelStart
+		if labelLen == 0 || labelLen > maxDNSLabelLen {
 			return nil, ErrInvalidName
 		}
-		encoded = append(encoded, byte(len(label)))
-		encoded = append(encoded, label...)
+		encoded = append(encoded, byte(labelLen))
+		encoded = append(encoded, name[labelStart:i]...)
+		labelStart = i + 1
 	}
 	encoded = append(encoded, 0)
 	return encoded, nil

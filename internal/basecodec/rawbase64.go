@@ -36,6 +36,13 @@ func EncodeRawBase64To(dst []byte, data []byte) []byte {
 	return dst
 }
 
+func EncodeRawBase64Into(dst []byte, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	rawBase64Encoding.Encode(dst, data)
+}
+
 func DecodeRawBase64(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return []byte{}, nil
