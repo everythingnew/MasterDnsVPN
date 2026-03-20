@@ -247,21 +247,21 @@ func parseResourceRecords(data []byte, offset int, count int) ([]ResourceRecord,
 }
 
 func parseName(data []byte, offset int) (string, int, error) {
-	if offset >= len(data) {
+	dataLen := len(data)
+	if offset >= dataLen {
 		return "", offset, ErrInvalidName
 	}
 
 	var (
-		jumped    bool
-		jumps     int
-		origNext  = offset
-		name      strings.Builder
-		hasLabels bool
+		jumped   bool
+		jumps    int
+		origNext = offset
+		name     strings.Builder
+		hasLabel bool
 	)
-	name.Grow(64)
 
 	for {
-		if offset >= len(data) {
+		if offset >= dataLen {
 			return "", origNext, ErrInvalidName
 		}
 
@@ -274,12 +274,12 @@ func parseName(data []byte, offset int) (string, int, error) {
 			break
 		}
 
-		if length&0xC0 == 0xC0 {
-			if offset+1 >= len(data) || jumps >= maxNameJumps {
+		if length >= 192 { // 0xC0
+			if offset+1 >= dataLen || jumps >= maxNameJumps {
 				return "", origNext, ErrInvalidName
 			}
 			ptr := int(binary.BigEndian.Uint16(data[offset:offset+2]) & 0x3FFF)
-			if ptr >= len(data) {
+			if ptr >= dataLen {
 				return "", origNext, ErrInvalidName
 			}
 			if !jumped {
@@ -297,25 +297,30 @@ func parseName(data []byte, offset int) (string, int, error) {
 
 		offset++
 		end := offset + length
-		if end > len(data) {
+		if end > dataLen {
 			return "", origNext, ErrInvalidName
 		}
-		if hasLabels {
+
+		if name.Len() == 0 {
+			name.Grow(64)
+		} else {
 			name.WriteByte('.')
 		}
+
 		writeLowerASCIILabel(&name, data[offset:end])
-		hasLabels = true
+		hasLabel = true
 		offset = end
 		if !jumped {
 			origNext = offset
 		}
 	}
 
-	if !hasLabels {
+	if !hasLabel {
 		return ".", origNext, nil
 	}
 	return name.String(), origNext, nil
 }
+
 
 func writeLowerASCIILabel(dst *strings.Builder, label []byte) {
 	upperIndex := -1

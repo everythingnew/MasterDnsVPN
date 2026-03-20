@@ -62,22 +62,31 @@ func buildResponseWithRCode(request []byte, rcode uint8) ([]byte, error) {
 		return nil, ErrNotDNSRequest
 	}
 
-	questionBytes, questionCount, questionEndOffset := extractQuestionSection(request, header)
-	optRecords, optRecordsLen := extractOPTRecordsFromOffset(request, header, questionEndOffset)
+	questionEndOffset, err := skipQuestions(request, dnsHeaderSize, int(header.QDCount))
+	questionLen := 0
+	questionCount := uint16(0)
+	if err == nil && questionEndOffset >= dnsHeaderSize && questionEndOffset <= len(request) {
+		questionLen = questionEndOffset - dnsHeaderSize
+		questionCount = header.QDCount
+	}
 
-	response := make([]byte, dnsHeaderSize+len(questionBytes)+optRecordsLen)
+
+	optStart, optLen := findOPTRecordRange(request, header, questionEndOffset)
+
+	response := make([]byte, dnsHeaderSize+questionLen+optLen)
 	binary.BigEndian.PutUint16(response[0:2], header.ID)
 	binary.BigEndian.PutUint16(response[2:4], buildResponseFlags(header.Flags, rcode))
 	binary.BigEndian.PutUint16(response[4:6], questionCount)
-	binary.BigEndian.PutUint16(response[6:8], 0)
-	binary.BigEndian.PutUint16(response[8:10], 0)
-	binary.BigEndian.PutUint16(response[10:12], uint16(len(optRecords)))
+	// ANCount, NSCount are 0
+	binary.BigEndian.PutUint16(response[10:12], uint16(getARCount(optLen)))
 
-	offset := dnsHeaderSize
-	offset += copy(response[offset:], questionBytes)
-	for _, record := range optRecords {
-		offset += copy(response[offset:], record)
+	if questionLen > 0 {
+		copy(response[dnsHeaderSize:], request[dnsHeaderSize:questionEndOffset])
 	}
+	if optLen > 0 {
+		copy(response[dnsHeaderSize+questionLen:], request[optStart:optStart+optLen])
+	}
+
 
 	return response, nil
 }
@@ -90,31 +99,36 @@ func buildResponseWithRCodeLite(request []byte, parsed LitePacket, rcode uint8) 
 		return nil, ErrNotDNSRequest
 	}
 
-	questionBytes := []byte(nil)
-	questionCount := uint16(0)
+	optStart, optLen := findOPTRecordRange(request, parsed.Header, parsed.QuestionEndOffset)
+
+	questionLen := 0
 	if parsed.QuestionEndOffset >= dnsHeaderSize && parsed.QuestionEndOffset <= len(request) {
-		questionBytes = request[dnsHeaderSize:parsed.QuestionEndOffset]
-		questionCount = parsed.Header.QDCount
+		questionLen = parsed.QuestionEndOffset - dnsHeaderSize
 	}
 
-	optRecords, optRecordsLen := extractOPTRecordsFromOffset(request, parsed.Header, parsed.QuestionEndOffset)
-
-	response := make([]byte, dnsHeaderSize+len(questionBytes)+optRecordsLen)
+	response := make([]byte, dnsHeaderSize+questionLen+optLen)
 	binary.BigEndian.PutUint16(response[0:2], parsed.Header.ID)
 	binary.BigEndian.PutUint16(response[2:4], buildResponseFlags(parsed.Header.Flags, rcode))
-	binary.BigEndian.PutUint16(response[4:6], questionCount)
-	binary.BigEndian.PutUint16(response[6:8], 0)
-	binary.BigEndian.PutUint16(response[8:10], 0)
-	binary.BigEndian.PutUint16(response[10:12], uint16(len(optRecords)))
+	binary.BigEndian.PutUint16(response[4:6], parsed.Header.QDCount)
+	binary.BigEndian.PutUint16(response[10:12], uint16(getARCount(optLen)))
 
-	offset := dnsHeaderSize
-	offset += copy(response[offset:], questionBytes)
-	for _, record := range optRecords {
-		offset += copy(response[offset:], record)
+	if questionLen > 0 {
+		copy(response[dnsHeaderSize:], request[dnsHeaderSize:parsed.QuestionEndOffset])
+	}
+	if optLen > 0 {
+		copy(response[dnsHeaderSize+questionLen:], request[optStart:optStart+optLen])
 	}
 
 	return response, nil
 }
+
+func getARCount(optLen int) int {
+	if optLen > 0 {
+		return 1
+	}
+	return 0
+}
+
 
 func isLikelyDNSRequestHeader(header Header) bool {
 	if header.QR != 0 {
@@ -169,32 +183,65 @@ func extractOPTRecordsFromRequest(request []byte, header Header, canWalk bool) (
 }
 
 func extractOPTRecordsFromOffset(request []byte, header Header, questionEndOffset int) ([][]byte, int) {
-	if header.ARCount == 0 {
+	start, length := findOPTRecordRange(request, header, questionEndOffset)
+	if length == 0 {
 		return nil, 0
 	}
+	return [][]byte{request[start : start+length]}, length
+}
+
+func findOPTRecordRange(request []byte, header Header, questionEndOffset int) (int, int) {
+	if header.ARCount == 0 {
+		return 0, 0
+	}
 	if questionEndOffset < dnsHeaderSize || questionEndOffset > len(request) {
-		return nil, 0
+		return 0, 0
 	}
 
 	offset := questionEndOffset
 	var err error
 	offset, err = skipResourceRecords(request, offset, int(header.ANCount))
 	if err != nil {
-		return nil, 0
+		return 0, 0
 	}
 
 	offset, err = skipResourceRecords(request, offset, int(header.NSCount))
 	if err != nil {
-		return nil, 0
+		return 0, 0
 	}
 
-	records, recordsLen, _, err := extractRawOPTRecords(request, offset, int(header.ARCount))
-	if err != nil {
-		return nil, 0
-	}
-
-	return records, recordsLen
+	return findFirstOPTRecordInAdditional(request, offset, int(header.ARCount))
 }
+
+func findFirstOPTRecordInAdditional(data []byte, offset int, count int) (int, int) {
+	for range count {
+		recordStart := offset
+
+		nextOffset, err := skipName(data, offset)
+		if err != nil {
+			return 0, 0
+		}
+		if nextOffset+10 > len(data) {
+			return 0, 0
+		}
+
+		recordType := binary.BigEndian.Uint16(data[nextOffset : nextOffset+2])
+		rdLen := int(binary.BigEndian.Uint16(data[nextOffset+8 : nextOffset+10]))
+		recordEnd := nextOffset + 10 + rdLen
+		if recordEnd > len(data) {
+			return 0, 0
+		}
+
+		if recordType == Enums.DNS_RECORD_TYPE_OPT {
+			return recordStart, recordEnd - recordStart
+		}
+
+		offset = recordEnd
+	}
+
+	return 0, 0
+}
+
 
 func skipQuestions(data []byte, offset int, count int) (int, error) {
 	for range count {
@@ -271,13 +318,13 @@ func extractRawOPTRecords(data []byte, offset int, count int) ([][]byte, int, in
 }
 
 func skipName(data []byte, offset int) (int, error) {
-	if offset >= len(data) {
+	dataLen := len(data)
+	if offset >= dataLen {
 		return offset, ErrInvalidName
 	}
 
-	pointerJumps := 0
 	for {
-		if offset >= len(data) {
+		if offset >= dataLen {
 			return offset, ErrInvalidName
 		}
 
@@ -286,16 +333,10 @@ func skipName(data []byte, offset int) (int, error) {
 			return offset + 1, nil
 		}
 
-		if length&0xC0 == 0xC0 {
-			if offset+1 >= len(data) || pointerJumps >= maxNameJumps {
+		if length >= 192 { // 0xC0
+			if offset+1 >= dataLen {
 				return offset, ErrInvalidName
 			}
-
-			ptr := int(binary.BigEndian.Uint16(data[offset:offset+2]) & 0x3FFF)
-			if ptr >= len(data) {
-				return offset, ErrInvalidName
-			}
-
 			return offset + 2, nil
 		}
 
@@ -303,10 +344,7 @@ func skipName(data []byte, offset int) (int, error) {
 			return offset, ErrInvalidName
 		}
 
-		offset++
-		if offset+length > len(data) {
-			return offset, ErrInvalidName
-		}
-		offset += length
+		offset += length + 1
 	}
 }
+

@@ -8,7 +8,7 @@
 package client
 
 import (
-	"masterdnsvpn-go/internal/dnscache"
+	dnsCache "masterdnsvpn-go/internal/dnscache"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 )
@@ -53,7 +53,7 @@ func (c *Client) handleDNSQueryPacket(query []byte) ([]byte, *dnsDispatchRequest
 		return response, nil
 	}
 
-	cacheKey := dnscache.BuildKey(metadata.Domain, metadata.QType, metadata.QClass)
+	cacheKey := dnsCache.BuildKey(metadata.Domain, metadata.QType, metadata.QClass)
 	recordTypeName := ""
 
 	if c.log != nil {

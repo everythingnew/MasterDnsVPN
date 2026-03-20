@@ -87,7 +87,7 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 
 	header := parseHeader(questionPacket)
 	questionBytes, questionCount, questionEndOffset := extractQuestionSection(questionPacket, header)
-	optRecords, optRecordsLen := extractOPTRecordsFromOffset(questionPacket, header, questionEndOffset)
+	optStart, optLen := findOPTRecordRange(questionPacket, header, questionEndOffset)
 
 	nameBytes, err := encodeDNSNameStrict(answerName)
 	if err != nil {
@@ -104,13 +104,13 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 		answerLen += nameLen + 10 + len(payload)
 	}
 
-	response := make([]byte, dnsHeaderSize+len(questionBytes)+answerLen+optRecordsLen)
+	response := make([]byte, dnsHeaderSize+len(questionBytes)+answerLen+optLen)
 	binary.BigEndian.PutUint16(response[0:2], header.ID)
 	binary.BigEndian.PutUint16(response[2:4], buildResponseFlags(header.Flags, Enums.DNSR_CODE_NO_ERROR))
 	binary.BigEndian.PutUint16(response[4:6], questionCount)
 	binary.BigEndian.PutUint16(response[6:8], uint16(len(answerPayloads)))
 	binary.BigEndian.PutUint16(response[8:10], 0)
-	binary.BigEndian.PutUint16(response[10:12], uint16(len(optRecords)))
+	binary.BigEndian.PutUint16(response[10:12], uint16(getARCount(optLen)))
 
 	offset := dnsHeaderSize
 	offset += copy(response[offset:], questionBytes)
@@ -131,12 +131,13 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 		offset += copy(response[offset:], payload)
 	}
 
-	for _, record := range optRecords {
-		offset += copy(response[offset:], record)
+	if optLen > 0 {
+		copy(response[offset:], questionPacket[optStart:optStart+optLen])
 	}
 
 	return response, nil
 }
+
 
 func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet VpnProto.Packet, baseEncode bool) ([]byte, error) {
 	rawFrame, err := VpnProto.BuildRawAuto(VpnProto.BuildOptions{
@@ -178,20 +179,20 @@ func buildSingleTXTResponsePacket(questionPacket []byte, answerName string, answ
 
 	header := parseHeader(questionPacket)
 	questionBytes, questionCount, questionEndOffset := extractQuestionSection(questionPacket, header)
-	optRecords, optRecordsLen := extractOPTRecordsFromOffset(questionPacket, header, questionEndOffset)
+	optStart, optLen := findOPTRecordRange(questionPacket, header, questionEndOffset)
 
 	nameBytes, err := encodeDNSNameStrict(answerName)
 	if err != nil {
 		return nil, err
 	}
 
-	response := make([]byte, dnsHeaderSize+len(questionBytes)+len(nameBytes)+10+len(answerPayload)+optRecordsLen)
+	response := make([]byte, dnsHeaderSize+len(questionBytes)+len(nameBytes)+10+len(answerPayload)+optLen)
 	binary.BigEndian.PutUint16(response[0:2], header.ID)
 	binary.BigEndian.PutUint16(response[2:4], buildResponseFlags(header.Flags, Enums.DNSR_CODE_NO_ERROR))
 	binary.BigEndian.PutUint16(response[4:6], questionCount)
 	binary.BigEndian.PutUint16(response[6:8], 1)
 	binary.BigEndian.PutUint16(response[8:10], 0)
-	binary.BigEndian.PutUint16(response[10:12], uint16(len(optRecords)))
+	binary.BigEndian.PutUint16(response[10:12], uint16(getARCount(optLen)))
 
 	offset := dnsHeaderSize
 	offset += copy(response[offset:], questionBytes)
@@ -203,12 +204,13 @@ func buildSingleTXTResponsePacket(questionPacket []byte, answerName string, answ
 	offset += 10
 	offset += copy(response[offset:], answerPayload)
 
-	for _, record := range optRecords {
-		offset += copy(response[offset:], record)
+	if optLen > 0 {
+		copy(response[offset:], questionPacket[optStart:optStart+optLen])
 	}
 
 	return response, nil
 }
+
 
 func ExtractVPNResponse(packet []byte, baseEncoded bool) (VpnProto.Packet, error) {
 	parsed, err := ParsePacket(packet)
