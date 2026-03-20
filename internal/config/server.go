@@ -48,6 +48,10 @@ type ServerConfig struct {
 	DNSFragmentAssemblyTimeoutSecs    float64  `toml:"DNS_FRAGMENT_ASSEMBLY_TIMEOUT"`
 	DNSCacheMaxRecords                int      `toml:"DNS_CACHE_MAX_RECORDS"`
 	DNSCacheTTLSeconds                float64  `toml:"DNS_CACHE_TTL_SECONDS"`
+	UseExternalSOCKS5                 bool     `toml:"USE_EXTERNAL_SOCKS5"`
+	SOCKS5Auth                        bool     `toml:"SOCKS5_AUTH"`
+	SOCKS5User                        string   `toml:"SOCKS5_USER"`
+	SOCKS5Pass                        string   `toml:"SOCKS5_PASS"`
 	ForwardIP                         string   `toml:"FORWARD_IP"`
 	ForwardPort                       int      `toml:"FORWARD_PORT"`
 	Domain                            []string `toml:"DOMAIN"`
@@ -91,6 +95,10 @@ func defaultServerConfig() ServerConfig {
 		DNSFragmentAssemblyTimeoutSecs:    300.0,
 		DNSCacheMaxRecords:                2000,
 		DNSCacheTTLSeconds:                3600.0,
+		UseExternalSOCKS5:                 false,
+		SOCKS5Auth:                        false,
+		SOCKS5User:                        "admin",
+		SOCKS5Pass:                        "123456",
 		ForwardIP:                         "",
 		ForwardPort:                       0,
 		Domain:                            nil,
@@ -223,6 +231,23 @@ func LoadServerConfig(filename string) (ServerConfig, error) {
 	}
 	if cfg.ForwardPort < 0 || cfg.ForwardPort > 65535 {
 		return cfg, fmt.Errorf("invalid FORWARD_PORT: %d", cfg.ForwardPort)
+	}
+	if len(cfg.SOCKS5User) > 255 {
+		return cfg, fmt.Errorf("SOCKS5_USER cannot exceed 255 bytes")
+	}
+	if len(cfg.SOCKS5Pass) > 255 {
+		return cfg, fmt.Errorf("SOCKS5_PASS cannot exceed 255 bytes")
+	}
+	if cfg.SOCKS5Auth && (cfg.SOCKS5User == "" || cfg.SOCKS5Pass == "") {
+		return cfg, fmt.Errorf("SOCKS5_AUTH requires both SOCKS5_USER and SOCKS5_PASS")
+	}
+	if cfg.UseExternalSOCKS5 {
+		if cfg.ForwardIP == "" {
+			return cfg, fmt.Errorf("USE_EXTERNAL_SOCKS5 requires FORWARD_IP")
+		}
+		if cfg.ForwardPort <= 0 {
+			return cfg, fmt.Errorf("USE_EXTERNAL_SOCKS5 requires a valid FORWARD_PORT")
+		}
 	}
 
 	if cfg.MinVPNLabelLength <= 0 {

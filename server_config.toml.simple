@@ -60,6 +60,10 @@ DNS_CACHE_TTL_SECONDS = 3600.0
 # ------------------------------------------------------------------------------
 
 SOCKS_CONNECT_TIMEOUT = 8.0
+USE_EXTERNAL_SOCKS5 = false
+SOCKS5_AUTH = false
+SOCKS5_USER = "admin"
+SOCKS5_PASS = "123456"
 FORWARD_IP = ""
 FORWARD_PORT = 0
 

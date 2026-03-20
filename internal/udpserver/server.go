@@ -72,6 +72,11 @@ type Server struct {
 	invalidCookieWindowNanos int64
 	invalidCookieThreshold   int
 	socksConnectTimeout      time.Duration
+	useExternalSOCKS5        bool
+	externalSOCKS5Address    string
+	externalSOCKS5Auth       bool
+	externalSOCKS5User       []byte
+	externalSOCKS5Pass       []byte
 	streamOutboundTTL        time.Duration
 	streamOutboundMaxRetry   int
 	mtuProbePayloadPool      sync.Pool
@@ -150,6 +155,11 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		invalidCookieWindowNanos: invalidCookieWindow.Nanoseconds(),
 		invalidCookieThreshold:   cfg.InvalidCookieErrorThreshold,
 		socksConnectTimeout:      socksConnectTimeout,
+		useExternalSOCKS5:        cfg.UseExternalSOCKS5,
+		externalSOCKS5Address:    net.JoinHostPort(cfg.ForwardIP, strconv.Itoa(cfg.ForwardPort)),
+		externalSOCKS5Auth:       cfg.SOCKS5Auth,
+		externalSOCKS5User:       []byte(cfg.SOCKS5User),
+		externalSOCKS5Pass:       []byte(cfg.SOCKS5Pass),
 		streamOutboundTTL:        streamOutboundTTL,
 		streamOutboundMaxRetry:   cfg.StreamOutboundMaxRetries,
 		mtuProbePayloadPool: sync.Pool{
@@ -1113,7 +1123,7 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet, sessionReco
 			return
 		}
 		s.streams.EnsureOpen(vpnPacket.SessionID, vpnPacket.StreamID, now)
-		upstreamConn, err := s.dialSOCKSStreamTarget(s.cfg.ForwardIP, uint16(s.cfg.ForwardPort))
+		upstreamConn, err := s.dialSOCKSStreamTarget(s.cfg.ForwardIP, uint16(s.cfg.ForwardPort), nil)
 		if err != nil {
 			_ = s.queueSessionPacket(vpnPacket.SessionID, VpnProto.Packet{
 				PacketType:  Enums.PACKET_STREAM_RST,
@@ -1192,7 +1202,7 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet, sessionReco
 		return
 	}
 
-	upstreamConn, err := s.dialSOCKSStreamTarget(target.Host, target.Port)
+	upstreamConn, err := s.dialSOCKSStreamTarget(target.Host, target.Port, vpnPacket.Payload)
 	if err != nil {
 		packetType := s.mapSOCKSConnectError(err)
 		if s.log != nil {
@@ -1420,23 +1430,14 @@ func (s *Server) handleSOCKS5SynRequest(vpnPacket VpnProto.Packet, sessionRecord
 	return true
 }
 
-func (s *Server) dialSOCKSStreamTarget(host string, port uint16) (net.Conn, error) {
-	dialFn := s.dialStreamUpstreamFn
-	if dialFn == nil {
-		dialFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
-			return net.DialTimeout(network, address, timeout)
-		}
-	}
-	timeout := s.socksConnectTimeout
-	if timeout <= 0 {
-		timeout = s.cfg.SOCKSConnectTimeout()
-	}
-	return dialFn("tcp", net.JoinHostPort(host, strconv.Itoa(int(port))), timeout)
-}
-
 func (s *Server) mapSOCKSConnectError(err error) uint8 {
 	if err == nil {
 		return Enums.PACKET_SOCKS5_CONNECT_FAIL
+	}
+
+	var upstreamErr *upstreamSOCKS5Error
+	if errors.As(err, &upstreamErr) {
+		return upstreamErr.packetType
 	}
 
 	var dnsErr *net.DNSError

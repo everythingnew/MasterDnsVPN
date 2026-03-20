@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -1259,6 +1260,128 @@ func TestHandlePacketMapsSocks5DialFailure(t *testing.T) {
 	}
 	if vpnResponse.PacketType != Enums.PACKET_SOCKS5_CONNECTION_REFUSED {
 		t.Fatalf("unexpected packet type: got=%d want=%d", vpnResponse.PacketType, Enums.PACKET_SOCKS5_CONNECTION_REFUSED)
+	}
+}
+
+func TestDialSOCKSStreamTargetUsesExternalSOCKS5(t *testing.T) {
+	srv := New(config.ServerConfig{
+		UseExternalSOCKS5: true,
+		ForwardIP:         "127.0.0.1",
+		ForwardPort:       1080,
+	}, nil, nil)
+
+	clientSide, proxySide := net.Pipe()
+	defer clientSide.Close()
+	defer proxySide.Close()
+
+	srv.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+		if network != "tcp" {
+			t.Fatalf("unexpected network: %s", network)
+		}
+		if address != "127.0.0.1:1080" {
+			t.Fatalf("unexpected address: %s", address)
+		}
+		return clientSide, nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		var greeting [3]byte
+		if _, err := io.ReadFull(proxySide, greeting[:]); err != nil {
+			done <- err
+			return
+		}
+		if !bytes.Equal(greeting[:], []byte{0x05, 0x01, 0x00}) {
+			done <- errors.New("unexpected greeting")
+			return
+		}
+		if _, err := proxySide.Write([]byte{0x05, 0x00}); err != nil {
+			done <- err
+			return
+		}
+
+		request := make([]byte, 10)
+		if _, err := io.ReadFull(proxySide, request); err != nil {
+			done <- err
+			return
+		}
+		want := []byte{0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50}
+		if !bytes.Equal(request, want) {
+			done <- errors.New("unexpected connect request")
+			return
+		}
+
+		_, err := proxySide.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x1F, 0x90})
+		done <- err
+	}()
+
+	conn, err := srv.dialSOCKSStreamTarget("127.0.0.1", 80, []byte{0x01, 127, 0, 0, 1, 0x00, 0x50})
+	if err != nil {
+		t.Fatalf("dialSOCKSStreamTarget returned error: %v", err)
+	}
+	defer conn.Close()
+
+	if err := <-done; err != nil {
+		t.Fatalf("upstream emulation failed: %v", err)
+	}
+}
+
+func TestDialSOCKSStreamTargetMapsExternalSOCKS5AuthFailure(t *testing.T) {
+	srv := New(config.ServerConfig{
+		UseExternalSOCKS5: true,
+		SOCKS5Auth:        true,
+		SOCKS5User:        "user",
+		SOCKS5Pass:        "pass",
+		ForwardIP:         "127.0.0.1",
+		ForwardPort:       1080,
+	}, nil, nil)
+
+	clientSide, proxySide := net.Pipe()
+	defer clientSide.Close()
+	defer proxySide.Close()
+
+	srv.dialStreamUpstreamFn = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+		return clientSide, nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		var greeting [3]byte
+		if _, err := io.ReadFull(proxySide, greeting[:]); err != nil {
+			done <- err
+			return
+		}
+		if !bytes.Equal(greeting[:], []byte{0x05, 0x01, 0x02}) {
+			done <- errors.New("unexpected auth greeting")
+			return
+		}
+		if _, err := proxySide.Write([]byte{0x05, 0x02}); err != nil {
+			done <- err
+			return
+		}
+
+		authRequest := make([]byte, 11)
+		if _, err := io.ReadFull(proxySide, authRequest); err != nil {
+			done <- err
+			return
+		}
+		if _, err := proxySide.Write([]byte{0x01, 0x01}); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+
+	_, err := srv.dialSOCKSStreamTarget("127.0.0.1", 80, []byte{0x01, 127, 0, 0, 1, 0x00, 0x50})
+	if err == nil {
+		t.Fatal("expected auth failure error")
+	}
+	if got := srv.mapSOCKSConnectError(err); got != Enums.PACKET_SOCKS5_AUTH_FAILED {
+		t.Fatalf("unexpected mapped packet type: got=%d want=%d", got, Enums.PACKET_SOCKS5_AUTH_FAILED)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("upstream emulation failed: %v", err)
 	}
 }
 
