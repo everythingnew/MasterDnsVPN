@@ -328,7 +328,8 @@ func (c *Client) runLocalSOCKS5UDPAssociate(conn net.Conn) error {
 			continue
 		}
 
-		response := c.handleSOCKS5UDPDatagram(buffer[:n])
+		now := c.now()
+		response := c.handleSOCKS5UDPDatagram(buffer[:n], now)
 		if len(response) == 0 {
 			continue
 		}
@@ -338,7 +339,7 @@ func (c *Client) runLocalSOCKS5UDPAssociate(conn net.Conn) error {
 	}
 }
 
-func (c *Client) handleSOCKS5UDPDatagram(packet []byte) []byte {
+func (c *Client) handleSOCKS5UDPDatagram(packet []byte, now time.Time) []byte {
 	if c == nil {
 		return nil
 	}
@@ -349,7 +350,7 @@ func (c *Client) handleSOCKS5UDPDatagram(packet []byte) []byte {
 	if datagram.Target.Port != 53 {
 		return nil
 	}
-	response := c.resolveDNSQueryPacket(datagram.Payload)
+	response := c.resolveDNSQueryPacket(datagram.Payload, now)
 	if len(response) == 0 {
 		return nil
 	}

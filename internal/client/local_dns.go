@@ -132,7 +132,8 @@ func (c *Client) localDNSWorker(ctx context.Context, conn *net.UDPConn, queue <-
 					}
 				}()
 
-				response := c.resolveDNSQueryPacket(req.buffer[:req.size])
+				now := c.now()
+				response := c.resolveDNSQueryPacket(req.buffer[:req.size], now)
 				if len(response) != 0 {
 					_, _ = conn.WriteToUDP(response, req.addr)
 				}

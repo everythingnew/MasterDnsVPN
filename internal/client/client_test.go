@@ -491,9 +491,9 @@ func TestResolveDNSQueryPacketDedupesPendingDispatch(t *testing.T) {
 	}
 
 	results := make(chan []byte, 2)
-	go func() { results <- c.resolveDNSQueryPacket(query) }()
+	go func() { results <- c.resolveDNSQueryPacket(query, c.now()) }()
 	<-started
-	go func() { results <- c.resolveDNSQueryPacket(query) }()
+	go func() { results <- c.resolveDNSQueryPacket(query, c.now()) }()
 
 	response1 := <-results
 	response2 := <-results
@@ -1395,12 +1395,12 @@ func TestHandleSOCKS5UDPDatagramResolvesDNS(t *testing.T) {
 	cacheKey := dnscache.BuildKey("example.com", Enums.DNS_RECORD_TYPE_A, Enums.DNSQ_CLASS_IN)
 	c.localDNSCache.SetReady(cacheKey, "example.com", Enums.DNS_RECORD_TYPE_A, Enums.DNSQ_CLASS_IN, serverFailure, c.now())
 
-	packet := SocksProto.BuildUDPDatagram(SocksProto.Target{
+	packetBytes := SocksProto.BuildUDPDatagram(SocksProto.Target{
 		AddressType: SocksProto.AddressTypeIPv4,
 		Host:        "8.8.8.8",
 		Port:        53,
 	}, query)
-	response := c.handleSOCKS5UDPDatagram(packet)
+	response := c.handleSOCKS5UDPDatagram(packetBytes, c.now())
 	if len(response) == 0 {
 		t.Fatal("expected udp associate dns response")
 	}

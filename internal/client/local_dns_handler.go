@@ -92,8 +92,7 @@ func (c *Client) handleDNSQueryPacket(query []byte, now time.Time) ([]byte, *dns
 	return response, dispatch
 }
 
-func (c *Client) resolveDNSQueryPacket(query []byte) []byte {
-	now := c.now()
+func (c *Client) resolveDNSQueryPacket(query []byte, now time.Time) []byte {
 	response, dispatch := c.handleDNSQueryPacket(query, now)
 	if dispatch == nil {
 		if c.stream0Runtime != nil && c.stream0Runtime.IsRunning() {
