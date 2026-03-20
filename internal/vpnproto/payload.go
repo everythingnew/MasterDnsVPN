@@ -62,10 +62,6 @@ func ParseInflated(data []byte) (Packet, error) {
 }
 
 func BuildRawAuto(opts BuildOptions, minSize int) ([]byte, error) {
-	if !hasCompressionExtension(opts.PacketType) {
-		opts.CompressionType = compression.TypeOff
-		return BuildRaw(opts)
-	}
 	payload, compressionType := PreparePayload(opts.PacketType, opts.Payload, opts.CompressionType, minSize)
 	opts.Payload = payload
 	opts.CompressionType = compressionType
