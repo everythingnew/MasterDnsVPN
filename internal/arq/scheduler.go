@@ -152,6 +152,17 @@ func (s *Scheduler) PendingPings() int {
 	return s.pingQueued
 }
 
+func (s *Scheduler) HasPendingStream(streamID uint16) bool {
+	if s == nil || streamID == 0 {
+		return false
+	}
+	owner, ok := s.owners[streamID]
+	if !ok || owner == nil {
+		return false
+	}
+	return owner.queue.Len() > 0
+}
+
 func (s *Scheduler) Enqueue(target QueueTarget, packet QueuedPacket) bool {
 	if s == nil || isDropQueuePacket(packet.PacketType) {
 		return false

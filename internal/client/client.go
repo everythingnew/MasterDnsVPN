@@ -142,6 +142,8 @@ type clientStream struct {
 	Conn                 net.Conn
 	NextSequence         uint16
 	LocalFinSent         bool
+	LocalFinSeq          uint16
+	LocalFinAcked        bool
 	RemoteFinRecv        bool
 	ResetSent            bool
 	Closed               bool
@@ -834,7 +836,14 @@ func (c *Client) activeStreamCount() int {
 	}
 	c.streamsMu.RLock()
 	defer c.streamsMu.RUnlock()
-	return len(c.streams)
+	count := 0
+	for _, stream := range c.streams {
+		if stream == nil || clientStreamQuiescent(stream) {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func (c *Client) hasActiveStreamTXWork() bool {
@@ -853,6 +862,27 @@ func (c *Client) hasActiveStreamTXWork() bool {
 		if hasWork {
 			return true
 		}
+	}
+	return false
+}
+
+func clientStreamQuiescent(stream *clientStream) bool {
+	if stream == nil {
+		return true
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.Closed {
+		return true
+	}
+	if len(stream.TXQueue) != 0 || len(stream.TXInFlight) != 0 {
+		return false
+	}
+	if stream.ResetSent {
+		return false
+	}
+	if stream.LocalFinSent || stream.RemoteFinRecv {
+		return stream.LocalFinAcked && stream.RemoteFinRecv
 	}
 	return false
 }

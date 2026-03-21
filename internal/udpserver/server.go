@@ -722,19 +722,25 @@ func (s *Server) serveQueuedOrPong(questionPacket []byte, requestName string, se
 	sessionID := sessionRecord.ID
 
 	s.expireStalledOutboundStreams(sessionID, now)
-	if queued, ok := s.streamOutbound.Next(sessionID, now); ok {
+	if queued := s.streamOutbound.NextDetailed(sessionID, now); queued.HasPacket {
 		if s.log != nil {
+			sendKind := "first-send"
+			if queued.IsRetry {
+				sendKind = "retry"
+			}
 			s.log.Debugf(
-				"\U0001F4E4 <blue>Serving Queued Packet</blue> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Packet</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Bytes</blue>: <cyan>%d</cyan>",
+				"\U0001F4E4 <blue>Serving Queued Packet</blue> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Packet</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Bytes</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Mode</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Retry</blue>: <cyan>%d</cyan>",
 				sessionID,
-				Enums.PacketTypeName(queued.PacketType),
-				queued.StreamID,
-				queued.SequenceNum,
-				len(queued.Payload),
+				Enums.PacketTypeName(queued.Packet.PacketType),
+				queued.Packet.StreamID,
+				queued.Packet.SequenceNum,
+				len(queued.Packet.Payload),
+				sendKind,
+				queued.RetryCount,
 			)
 		}
-		resp := s.buildSessionVPNResponse(questionPacket, requestName, sessionRecord, queued)
-		arq.FreePayload(queued.Payload)
+		resp := s.buildSessionVPNResponse(questionPacket, requestName, sessionRecord, queued.Packet)
+		arq.FreePayload(queued.Packet.Payload)
 		return resp
 	}
 
@@ -1639,6 +1645,12 @@ func (s *Server) handleStreamFinRequest(vpnPacket VpnProto.Packet, sessionRecord
 		StreamID:    vpnPacket.StreamID,
 		SequenceNum: vpnPacket.SequenceNum,
 	})
+	_ = s.streams.FinalizeIfDrained(
+		vpnPacket.SessionID,
+		vpnPacket.StreamID,
+		now,
+		s.streamOutbound.HasPendingStream(vpnPacket.SessionID, vpnPacket.StreamID),
+	)
 	return true
 }
 
@@ -1667,12 +1679,41 @@ func (s *Server) handleStreamAckPacket(vpnPacket VpnProto.Packet, sessionRecord 
 	switch vpnPacket.PacketType {
 	case Enums.PACKET_STREAM_RST_ACK:
 		_ = s.streams.MarkReset(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
-		s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum, 0, 0)
+		matched := s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum, 0, 0)
+		if s.log != nil {
+			s.log.Debugf(
+				"\U0001F4EC <blue>Received Stream ACK</blue> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Packet</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Matched</blue>: <cyan>%t</cyan>",
+				vpnPacket.SessionID,
+				Enums.PacketTypeName(vpnPacket.PacketType),
+				vpnPacket.StreamID,
+				vpnPacket.SequenceNum,
+				matched,
+			)
+		}
 		s.streamOutbound.ClearStream(vpnPacket.SessionID, vpnPacket.StreamID)
 		s.removeStreamDataFragmentsForStream(vpnPacket.SessionID, vpnPacket.StreamID)
 	case Enums.PACKET_STREAM_DATA_ACK, Enums.PACKET_STREAM_FIN_ACK, Enums.PACKET_STREAM_SYN_ACK:
 		_, _ = s.streams.Touch(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
-		s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum, 0, 0)
+		matched := s.streamOutbound.Ack(vpnPacket.SessionID, vpnPacket.PacketType, vpnPacket.StreamID, vpnPacket.SequenceNum, 0, 0)
+		if s.log != nil {
+			s.log.Debugf(
+				"\U0001F4EC <blue>Received Stream ACK</blue> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Packet</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Stream</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Matched</blue>: <cyan>%t</cyan>",
+				vpnPacket.SessionID,
+				Enums.PacketTypeName(vpnPacket.PacketType),
+				vpnPacket.StreamID,
+				vpnPacket.SequenceNum,
+				matched,
+			)
+		}
+		if vpnPacket.PacketType == Enums.PACKET_STREAM_FIN_ACK {
+			_, _ = s.streams.MarkLocalFinAck(vpnPacket.SessionID, vpnPacket.StreamID, vpnPacket.SequenceNum, now)
+			_ = s.streams.FinalizeIfDrained(
+				vpnPacket.SessionID,
+				vpnPacket.StreamID,
+				now,
+				s.streamOutbound.HasPendingStream(vpnPacket.SessionID, vpnPacket.StreamID),
+			)
+		}
 	}
 	return true
 }

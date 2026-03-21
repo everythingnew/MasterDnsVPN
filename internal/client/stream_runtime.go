@@ -309,6 +309,14 @@ func (c *Client) sendStreamAckOneWay(packetType uint8, streamID uint16, sequence
 	if c == nil {
 		return VpnProto.Packet{}, ErrClientStreamClosed
 	}
+	if c.log != nil {
+		c.log.Debugf(
+			"\U0001F4E8 <blue>Sending Stream ACK</blue> <magenta>|</magenta> <blue>Stream ID</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Packet</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan>",
+			streamID,
+			Enums.PacketTypeName(packetType),
+			sequenceNum,
+		)
+	}
 	err := c.sendStreamProtocolOneWay(packetType, streamID, sequenceNum, nil, defaultRuntimeTimeout)
 	return VpnProto.Packet{}, err
 }
@@ -366,6 +374,8 @@ func (c *Client) queueStreamPacket(stream *clientStream, packetType uint8, paylo
 	stream.LastActivityAt = time.Now()
 	if packetType == Enums.PACKET_STREAM_FIN {
 		stream.LocalFinSent = true
+		stream.LocalFinSeq = sequenceNum
+		stream.LocalFinAcked = false
 	}
 	if packetType == Enums.PACKET_STREAM_RST {
 		stream.ResetSent = true
@@ -756,7 +766,16 @@ func streamFinished(stream *clientStream) bool {
 	}
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
-	return stream.Closed || (stream.LocalFinSent && stream.RemoteFinRecv)
+	if stream.Closed {
+		return true
+	}
+	if stream.ResetSent {
+		return false
+	}
+	if !stream.LocalFinSent || !stream.LocalFinAcked || !stream.RemoteFinRecv {
+		return false
+	}
+	return len(stream.TXQueue) == 0 && len(stream.TXInFlight) == 0
 }
 
 func matchesClientStreamAck(sentType uint8, ackType uint8) bool {

@@ -16,9 +16,9 @@ import (
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
-const streamOutboundInitialRetryDelay = 350 * time.Millisecond
-const streamOutboundMaxRetryDelay = 2 * time.Second
-const streamOutboundMinRetryDelay = 120 * time.Millisecond
+const streamOutboundInitialRetryDelay = 650 * time.Millisecond
+const streamOutboundMaxRetryDelay = 3 * time.Second
+const streamOutboundMinRetryDelay = 250 * time.Millisecond
 
 var streamOutboundAckTypeByPending = buildStreamOutboundAckTypeByPending()
 var streamOutboundAckRequired = buildStreamOutboundAckRequired()
@@ -29,6 +29,13 @@ type streamOutboundStore struct {
 	configuredPackedCaps [256]uint16
 	window               int
 	queueLimit           int
+}
+
+type outboundNextDetails struct {
+	Packet     VpnProto.Packet
+	HasPacket  bool
+	IsRetry    bool
+	RetryCount int
 }
 
 type outboundPendingPacket struct {
@@ -117,24 +124,29 @@ func (s *streamOutboundStore) Enqueue(sessionID uint8, target arq.QueueTarget, p
 }
 
 func (s *streamOutboundStore) Next(sessionID uint8, now time.Time) (VpnProto.Packet, bool) {
+	details := s.NextDetailed(sessionID, now)
+	return details.Packet, details.HasPacket
+}
+
+func (s *streamOutboundStore) NextDetailed(sessionID uint8, now time.Time) outboundNextDetails {
 	if s == nil || sessionID == 0 {
-		return VpnProto.Packet{}, false
+		return outboundNextDetails{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	session := s.sessions[sessionID]
 	if session == nil {
-		return VpnProto.Packet{}, false
+		return outboundNextDetails{}
 	}
 	if len(session.pending) < s.window && session.scheduler.Pending() != 0 {
 		dequeued, ok := session.scheduler.Dequeue()
 		if !ok {
-			return VpnProto.Packet{}, false
+			return outboundNextDetails{}
 		}
 		packet := vpnPacketFromQueued(dequeued.Packet)
 		if !streamOutboundAckRequired[packet.PacketType] {
-			return packet, true
+			return outboundNextDetails{Packet: packet, HasPacket: true}
 		}
 		retryBase := sessionRetryBase(session)
 		session.pending = append(session.pending, outboundPendingPacket{
@@ -144,7 +156,7 @@ func (s *streamOutboundStore) Next(sessionID uint8, now time.Time) (VpnProto.Pac
 			RetryAt:    now.Add(retryBase),
 			RetryDelay: retryBase,
 		})
-		return packet, true
+		return outboundNextDetails{Packet: packet, HasPacket: true}
 	}
 
 	selectedIdx := -1
@@ -155,7 +167,7 @@ func (s *streamOutboundStore) Next(sessionID uint8, now time.Time) (VpnProto.Pac
 		}
 	}
 	if selectedIdx < 0 {
-		return VpnProto.Packet{}, false
+		return outboundNextDetails{}
 	}
 
 	pending := &session.pending[selectedIdx]
@@ -172,7 +184,12 @@ func (s *streamOutboundStore) Next(sessionID uint8, now time.Time) (VpnProto.Pac
 		delay = streamOutboundMaxRetryDelay
 	}
 	pending.RetryDelay = delay
-	return packet, true
+	return outboundNextDetails{
+		Packet:     packet,
+		HasPacket:  true,
+		IsRetry:    true,
+		RetryCount: pending.RetryCount,
+	}
 }
 
 func (s *streamOutboundStore) ExpireStalled(sessionID uint8, now time.Time, maxRetries int, ttl time.Duration) []uint16 {
@@ -291,6 +308,25 @@ func (s *streamOutboundStore) ClearStream(sessionID uint8, streamID uint16) {
 	if session.scheduler.Pending() == 0 && len(session.pending) == 0 {
 		delete(s.sessions, sessionID)
 	}
+}
+
+func (s *streamOutboundStore) HasPendingStream(sessionID uint8, streamID uint16) bool {
+	if s == nil || sessionID == 0 || streamID == 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session := s.sessions[sessionID]
+	if session == nil {
+		return false
+	}
+	for _, pending := range session.pending {
+		if pending.Packet.StreamID == streamID {
+			return true
+		}
+	}
+	return session.scheduler.HasPendingStream(streamID)
 }
 
 func (s *streamOutboundStore) RemoveSession(sessionID uint8) {

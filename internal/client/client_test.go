@@ -1484,18 +1484,25 @@ func TestHandleInboundStreamPacketReordersOutOfOrderData(t *testing.T) {
 		Payload:     []byte("old"),
 	}
 
-	writeDone := make(chan []byte, 3)
+	writeDone := make(chan []byte, 1)
 	go func() {
-		buffer := make([]byte, 8)
-		n, _ := clientConn.Read(buffer)
-		writeDone <- append([]byte(nil), buffer[:n]...)
-		_ = clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		n, err := clientConn.Read(buffer)
-		if err == nil {
-			writeDone <- append([]byte(nil), buffer[:n]...)
-			return
+		buffer := make([]byte, 16)
+		collected := make([]byte, 0, 16)
+		for {
+			_ = clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			n, err := clientConn.Read(buffer)
+			if n > 0 {
+				collected = append(collected, buffer[:n]...)
+			}
+			if err != nil {
+				writeDone <- collected
+				return
+			}
+			if len(collected) >= len("oldnew") {
+				writeDone <- collected
+				return
+			}
 		}
-		writeDone <- nil
 	}()
 
 	c.exchangeQueryFn = func(conn Connection, packet []byte, timeout time.Duration) ([]byte, error) {
@@ -1505,17 +1512,9 @@ func TestHandleInboundStreamPacketReordersOutOfOrderData(t *testing.T) {
 	_, _ = c.handleInboundStreamPacket(newer, time.Second)
 	_, _ = c.handleInboundStreamPacket(older, time.Second)
 
-	first := <-writeDone
-	second := <-writeDone
-	third := <-writeDone
-	if string(first) != "old" {
-		t.Fatalf("unexpected first payload: %q", first)
-	}
-	if string(second) != "new" {
-		t.Fatalf("unexpected second payload: %q", second)
-	}
-	if third != nil {
-		t.Fatalf("out-of-order inbound data should drain exactly once per sequence: %q", third)
+	combined := <-writeDone
+	if string(combined) != "oldnew" {
+		t.Fatalf("out-of-order inbound data should be drained in-order once ready: %q", combined)
 	}
 
 	c.deleteStream(stream.ID)
@@ -1577,7 +1576,7 @@ func TestHandleInboundStreamPacketWritesLocalDataAndSendsAck(t *testing.T) {
 	_, err = c.handleInboundStreamPacket(VpnProto.Packet{
 		PacketType:  Enums.PACKET_STREAM_DATA,
 		StreamID:    44,
-		SequenceNum: 12,
+		SequenceNum: 1,
 		Payload:     []byte("hello"),
 	}, time.Second)
 	if err != nil {
@@ -1587,7 +1586,7 @@ func TestHandleInboundStreamPacketWritesLocalDataAndSendsAck(t *testing.T) {
 	if got := <-writeDone; string(got) != "hello" {
 		t.Fatalf("unexpected local write payload: %q", got)
 	}
-	if ackPacket.PacketType != Enums.PACKET_STREAM_DATA_ACK || ackPacket.StreamID != 44 || ackPacket.SequenceNum != 12 {
+	if ackPacket.PacketType != Enums.PACKET_STREAM_DATA_ACK || ackPacket.StreamID != 44 || ackPacket.SequenceNum != 1 {
 		t.Fatalf("unexpected ack packet: %+v", ackPacket)
 	}
 	stream.mu.Lock()
@@ -1598,11 +1597,15 @@ func TestHandleInboundStreamPacketWritesLocalDataAndSendsAck(t *testing.T) {
 }
 
 func TestHandleInboundStreamPacketAssemblesFragmentedDataBeforeWrite(t *testing.T) {
+	codec, err := security.NewCodec(0, "")
+	if err != nil {
+		t.Fatalf("NewCodec returned error: %v", err)
+	}
 	c := New(config.ClientConfig{
 		Domains:                   []string{"a.com"},
 		LocalDNSPendingTimeoutSec: 5,
 		LocalDNSFragmentTimeoutSec: 300,
-	}, nil, nil)
+	}, nil, codec)
 	c.sessionReady = true
 	c.sessionID = 1
 	c.sessionCookie = 1
@@ -1616,23 +1619,32 @@ func TestHandleInboundStreamPacketAssemblesFragmentedDataBeforeWrite(t *testing.
 
 	acks := make(chan VpnProto.Packet, 4)
 	c.sendOneWayPacketFn = func(connection Connection, payload []byte, deadline time.Time) error {
-		packet, err := c.parseValidatedServerPacket(payload, ErrTunnelDNSDispatchFailed)
+		parsed, err := DnsParser.ParsePacketLite(payload)
+		if err != nil {
+			return err
+		}
+		if !parsed.HasQuestion {
+			t.Fatal("expected one-way stream ack question")
+		}
+		packet, err := VpnProto.ParseFromLabels(extractTestTunnelLabels(parsed.FirstQuestion.Name, connection.Domain), c.codec)
 		if err != nil {
 			return err
 		}
 		acks <- packet
 		return nil
 	}
-	c.connections = []Connection{{Domain: "a.com", ResolverLabel: "127.0.0.1:5350", Key: "r1"}}
+	c.connections = []Connection{{Domain: "a.com", ResolverLabel: "127.0.0.1:5350", Key: "r1", IsValid: true}}
+	c.connectionsByKey = map[string]int{"r1": 0}
+	c.rebuildBalancer()
 
 	readDone := make(chan []byte, 1)
 	go func() {
-		buffer := make([]byte, 8)
+		buffer := make([]byte, 5)
 		n, _ := io.ReadFull(serverConn, buffer)
 		readDone <- append([]byte(nil), buffer[:n]...)
 	}()
 
-	_, err := c.handleInboundStreamPacket(VpnProto.Packet{
+	_, err = c.handleInboundStreamPacket(VpnProto.Packet{
 		PacketType:      Enums.PACKET_STREAM_DATA,
 		StreamID:        55,
 		HasStreamID:     true,
@@ -1927,6 +1939,23 @@ func TestExpireClientStreamTXQueuesRSTOnRetryBudgetExceeded(t *testing.T) {
 	}
 	if len(stream.TXQueue) != 1 || stream.TXQueue[0].PacketType != Enums.PACKET_STREAM_RST {
 		t.Fatalf("expected queued reset packet, queue=%+v", stream.TXQueue)
+	}
+}
+
+func TestStreamFinishedRequiresFinAck(t *testing.T) {
+	stream := &clientStream{
+		LocalFinSent:  true,
+		LocalFinSeq:   7,
+		RemoteFinRecv: true,
+	}
+	if streamFinished(stream) {
+		t.Fatal("stream must not finish before local FIN is acked")
+	}
+	stream.mu.Lock()
+	stream.LocalFinAcked = true
+	stream.mu.Unlock()
+	if !streamFinished(stream) {
+		t.Fatal("stream should finish once both FIN sides are complete and queues are empty")
 	}
 }
 
@@ -2579,6 +2608,60 @@ func TestStream0PingScheduleTreatsPendingControlAsBusy(t *testing.T) {
 	shouldPing, sleepFor := r.nextPingSchedule(now)
 	if !shouldPing {
 		t.Fatalf("expected pending control work to trigger a quick ping, sleepFor=%v", sleepFor)
+	}
+}
+
+func TestApplyClientACKStateClearsControlState(t *testing.T) {
+	c := New(config.ClientConfig{}, nil, nil)
+	now := time.Now()
+
+	c.noteStreamControlSend(Enums.PACKET_STREAM_SYN, 10, 1, now)
+	c.noteStreamControlSend(Enums.PACKET_SOCKS5_SYN, 10, 2, now)
+	if !c.hasPendingStreamControlWork() {
+		t.Fatal("expected pending control work before ack")
+	}
+
+	c.applyClientACKState(VpnProto.Packet{
+		PacketType:  Enums.PACKET_STREAM_SYN_ACK,
+		StreamID:    10,
+		SequenceNum: 1,
+	})
+	if _, ok := c.streamControlRetryAt(Enums.PACKET_STREAM_SYN, 10, 1); ok {
+		t.Fatal("expected STREAM_SYN control state to be cleared by ack")
+	}
+
+	c.applyClientACKState(VpnProto.Packet{
+		PacketType:  Enums.PACKET_SOCKS5_SYN_ACK,
+		StreamID:    10,
+		SequenceNum: 2,
+	})
+	if _, ok := c.streamControlRetryAt(Enums.PACKET_SOCKS5_SYN, 10, 2); ok {
+		t.Fatal("expected SOCKS5_SYN control state to be cleared by ack")
+	}
+	if c.hasPendingStreamControlWork() {
+		t.Fatal("expected no pending control work after all control acks")
+	}
+}
+
+func TestActiveStreamCountIgnoresQuiescentStream(t *testing.T) {
+	c := New(config.ClientConfig{Domains: []string{"a.com"}}, nil, nil)
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	stream := c.createStream(88, clientConn)
+	defer c.deleteStream(stream.ID)
+
+	stream.mu.Lock()
+	stream.LocalFinSent = true
+	stream.LocalFinAcked = true
+	stream.RemoteFinRecv = true
+	stream.TXQueue = nil
+	stream.TXInFlight = nil
+	stream.mu.Unlock()
+
+	if got := c.activeStreamCount(); got != 0 {
+		t.Fatalf("expected quiescent stream to be ignored, got=%d", got)
 	}
 }
 

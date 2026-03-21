@@ -35,6 +35,9 @@ type streamStateRecord struct {
 	LastActivityAt time.Time
 	LastSequence   uint16
 	OutboundSeq    uint16
+	LocalFinSeq    uint16
+	LocalFinSet    bool
+	LocalFinAcked  bool
 	InboundNextSeq uint16
 	InboundNextSet bool
 	InboundPending map[uint16][]byte
@@ -243,6 +246,8 @@ func (s *streamStateStore) MarkLocalFin(sessionID uint8, streamID uint16, sequen
 	}
 	record.LastActivityAt = now
 	record.LastSequence = sequenceNum
+	record.LocalFinSeq = sequenceNum
+	record.LocalFinSet = true
 	switch record.State {
 	case Enums.STREAM_STATE_HALF_CLOSED_REMOTE:
 		record.State = Enums.STREAM_STATE_DRAINING
@@ -250,6 +255,53 @@ func (s *streamStateStore) MarkLocalFin(sessionID uint8, streamID uint16, sequen
 		record.State = Enums.STREAM_STATE_HALF_CLOSED_LOCAL
 	}
 	return cloneStreamStateRecord(record), true
+}
+
+func (s *streamStateStore) MarkLocalFinAck(sessionID uint8, streamID uint16, sequenceNum uint16, now time.Time) (*streamStateRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record := s.lookupLocked(sessionID, streamID)
+	if record == nil {
+		return nil, false
+	}
+	record.LastActivityAt = now
+	record.LastSequence = sequenceNum
+	if record.LocalFinSet && record.LocalFinSeq == sequenceNum {
+		record.LocalFinAcked = true
+	}
+	if record.RemoteFinSet && record.LocalFinAcked {
+		record.State = Enums.STREAM_STATE_TIME_WAIT
+	}
+	return cloneStreamStateRecord(record), true
+}
+
+func (s *streamStateStore) FinalizeIfDrained(sessionID uint8, streamID uint16, now time.Time, hasPending bool) bool {
+	s.mu.Lock()
+	streams := s.sessions[sessionID]
+	record := s.lookupLocked(sessionID, streamID)
+	if record == nil {
+		s.mu.Unlock()
+		return false
+	}
+	if hasPending || !record.RemoteFinSet || !record.LocalFinSet || !record.LocalFinAcked || len(record.InboundPending) != 0 {
+		s.mu.Unlock()
+		return false
+	}
+	conn := record.UpstreamConn
+	record.UpstreamConn = nil
+	record.Connected = false
+	record.LastActivityAt = now
+	record.State = Enums.STREAM_STATE_CLOSED
+	s.noteClosedLocked(sessionID, streamID, now.UnixNano())
+	delete(streams, streamID)
+	if len(streams) == 0 {
+		delete(s.sessions, sessionID)
+	}
+	s.mu.Unlock()
+
+	streamutil.SafeClose(conn)
+	return true
 }
 
 func (s *streamStateStore) NextOutboundSequence(sessionID uint8, streamID uint16, now time.Time) (uint16, bool) {

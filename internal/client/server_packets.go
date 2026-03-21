@@ -72,11 +72,37 @@ func (c *Client) applyClientACKState(packet VpnProto.Packet) {
 	case Enums.PACKET_STREAM_DATA_ACK, Enums.PACKET_STREAM_FIN_ACK, Enums.PACKET_STREAM_RST_ACK:
 		c.noteStreamProgress(packet.StreamID)
 		if stream, ok := c.getStream(packet.StreamID); ok {
+			if packet.PacketType == Enums.PACKET_STREAM_FIN_ACK {
+				c.clearStreamControlState(Enums.PACKET_STREAM_FIN, packet.StreamID, packet.SequenceNum)
+				stream.mu.Lock()
+				if stream.LocalFinSent && stream.LocalFinSeq == packet.SequenceNum {
+					stream.LocalFinAcked = true
+				}
+				stream.mu.Unlock()
+			}
+			if packet.PacketType == Enums.PACKET_STREAM_RST_ACK {
+				c.clearStreamControlState(Enums.PACKET_STREAM_RST, packet.StreamID, packet.SequenceNum)
+			}
 			ackClientStreamTXWithLog(c, stream, packet.SequenceNum, time.Now())
 			notifyStreamWake(stream)
+			if packet.PacketType == Enums.PACKET_STREAM_FIN_ACK && streamFinished(stream) {
+				c.deleteStream(stream.ID)
+			}
+			if packet.PacketType == Enums.PACKET_STREAM_RST_ACK {
+				stream.mu.Lock()
+				stream.Closed = true
+				stream.mu.Unlock()
+				c.deleteStream(stream.ID)
+			}
 		}
 	case Enums.PACKET_STREAM_SYN_ACK, Enums.PACKET_SOCKS5_SYN_ACK:
 		c.noteStreamProgress(packet.StreamID)
+		if packet.PacketType == Enums.PACKET_STREAM_SYN_ACK {
+			c.clearStreamControlState(Enums.PACKET_STREAM_SYN, packet.StreamID, packet.SequenceNum)
+		}
+		if packet.PacketType == Enums.PACKET_SOCKS5_SYN_ACK {
+			c.clearStreamControlState(Enums.PACKET_SOCKS5_SYN, packet.StreamID, packet.SequenceNum)
+		}
 	}
 	if isCacheableStreamControlReply(packet.PacketType) {
 		c.cacheStreamControlReply(packet)
@@ -117,6 +143,7 @@ func (c *Client) dispatchServerPacket(packet VpnProto.Packet, timeout time.Durat
 		return result, nil
 	default:
 		if isSOCKS5ErrorPacket(packet.PacketType) {
+			c.clearStreamControlState(Enums.PACKET_SOCKS5_SYN, packet.StreamID, packet.SequenceNum)
 			c.applyClientACKState(packet)
 			return result, nil
 		}
