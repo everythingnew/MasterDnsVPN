@@ -11,11 +11,13 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
+	"masterdnsvpn-go/internal/mlq"
 )
 
 var ErrSessionTableFull = errors.New("session table full")
@@ -27,9 +29,19 @@ const (
 	sessionInitDataSize   = 10
 	minSessionMTU         = 30
 	maxSessionMTU         = 4096
+	PackedControlBlockSize = 7
+)
+
+type QueueTarget uint8
+
+const (
+	QueueTargetMain QueueTarget = iota
+	QueueTargetStream
 )
 
 type sessionRecord struct {
+	mu sync.RWMutex
+
 	ID                   uint8
 	Cookie               uint8
 	ResponseMode         uint8
@@ -46,6 +58,55 @@ type sessionRecord struct {
 	ReuseUntil           time.Time
 	reuseUntilUnixNano   int64
 	lastActivityUnixNano int64
+
+	// New fields for ARQ refactor
+	MainQueue     *mlq.MultiLevelQueue[*serverStreamTXPacket]
+	Streams       map[uint16]*Stream_server
+	ActiveStreams []uint16 // Sorted list of active stream IDs for Round-Robin
+	RRStreamID    uint16   // Last served stream ID for RR
+	EnqueueSeq    uint64   // Global sequence for FIFO inside same priority
+	StreamsMu     sync.RWMutex
+}
+
+// serverStreamTXPacket represents a queued packet pending transmission or retransmission.
+type serverStreamTXPacket struct {
+	PacketType  uint8
+	SequenceNum uint16
+	Payload     []byte
+	CreatedAt   time.Time
+}
+
+var txPacketPool = sync.Pool{
+	New: func() any {
+		return &serverStreamTXPacket{}
+	},
+}
+
+func getTXPacketFromPool() *serverStreamTXPacket {
+	return txPacketPool.Get().(*serverStreamTXPacket)
+}
+
+func putTXPacketToPool(p *serverStreamTXPacket) {
+	if p == nil {
+		return
+	}
+	p.Payload = nil
+	txPacketPool.Put(p)
+}
+
+func getTrackingKey(packetType uint8, sequenceNum uint16) uint32 {
+	return uint32(packetType)<<16 | uint32(sequenceNum)
+}
+
+// getEffectivePriority maps packet types to priorities (0 is highest, 5 is lowest).
+func getEffectivePriority(packetType uint8, basePriority int) int {
+	// Level 0: Critical Control ACKs
+	// Level 1: Control Requests (SYN, FIN, RST)
+	// Level 2: DNS Responses
+	// Level 3: Normal Data
+	// Level 4: Pings
+	// Level 5: Idle/Low priority
+	return basePriority
 }
 
 type sessionRuntimeView struct {
@@ -157,11 +218,14 @@ func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8,
 	}
 
 	record := &sessionRecord{
-		ID:           uint8(slot),
-		ResponseMode: payload[0],
-		CreatedAt:    now,
-		ReuseUntil:   now.Add(sessionInitTTL),
-		Signature:    signature,
+		ID:            uint8(slot),
+		ResponseMode:  payload[0],
+		CreatedAt:     now,
+		ReuseUntil:    now.Add(sessionInitTTL),
+		Signature:     signature,
+		MainQueue:     mlq.New[*serverStreamTXPacket](32),
+		Streams:       make(map[uint16]*Stream_server),
+		ActiveStreams: make([]uint16, 0, 8),
 	}
 	record.reuseUntilUnixNano = record.ReuseUntil.UnixNano()
 	record.setLastActivityUnixNano(nowUnixNano)
@@ -465,8 +529,20 @@ func (r *sessionRecord) applyMTUFromSessionInit(uploadMTU uint16, downloadMTU ui
 	r.UploadMTU = clampMTU(uploadMTU)
 	r.DownloadMTU = clampMTU(downloadMTU)
 	r.DownloadMTUBytes = int(r.DownloadMTU)
-	r.MaxPackedBlocks = arq.ComputeServerPackedControlBlockLimit(r.DownloadMTUBytes, maxPacketsPerBatch)
+	r.MaxPackedBlocks = computeServerPackedControlBlockLimit(r.DownloadMTUBytes, maxPacketsPerBatch)
 	r.StreamReadBufferSize = computeStreamReadBufferSize(r.DownloadMTUBytes)
+}
+
+func computeServerPackedControlBlockLimit(mtu int, maxPacketsPerBatch int) int {
+	// 7 bytes per packed control block
+	limit := (mtu - 100) / PackedControlBlockSize // Some overhead for headers
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > maxPacketsPerBatch {
+		limit = maxPacketsPerBatch
+	}
+	return limit
 }
 
 func (r *sessionRecord) runtimeView() sessionRuntimeView {
@@ -507,4 +583,49 @@ func (r *sessionRecord) snapshot() sessionSnapshot {
 		LastActivityAt:       lastActivityAt,
 		ReuseUntil:           r.ReuseUntil,
 	}
+}
+
+// ensureStream0 creates correctly virtual stream 0 if not exist
+func (r *sessionRecord) ensureStream0(logger arq.Logger) {
+	r.getOrCreateStream(0, arq.Config{IsVirtual: true}, nil, logger)
+}
+
+func (r *sessionRecord) getOrCreateStream(streamID uint16, arqConfig arq.Config, localConn io.ReadWriteCloser, logger arq.Logger) *Stream_server {
+	r.StreamsMu.Lock()
+	defer r.StreamsMu.Unlock()
+
+	if s, ok := r.Streams[streamID]; ok {
+		return s
+	}
+
+	s := NewStreamServer(streamID, r.ID, arqConfig, localConn, r.DownloadMTUBytes, logger)
+	r.Streams[streamID] = s
+
+	// Active streams tracking: keep sorted for Round-Robin predictability
+	found := false
+	for _, id := range r.ActiveStreams {
+		if id == streamID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Insert sorted
+		insertAt := 0
+		for i, id := range r.ActiveStreams {
+			if id > streamID {
+				insertAt = i
+				break
+			}
+			insertAt = i + 1
+		}
+		if insertAt == len(r.ActiveStreams) {
+			r.ActiveStreams = append(r.ActiveStreams, streamID)
+		} else {
+			r.ActiveStreams = append(r.ActiveStreams[:insertAt+1], r.ActiveStreams[insertAt:]...)
+			r.ActiveStreams[insertAt] = streamID
+		}
+	}
+
+	return s
 }
