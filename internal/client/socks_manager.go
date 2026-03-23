@@ -492,6 +492,10 @@ func (c *Client) HandleSocksConnected(packet VpnProto.Packet) error {
 		return nil
 	}
 
+	if s.StatusValue() == streamStatusActive {
+		return nil
+	}
+
 	if ok && s.StatusValue() == streamStatusCancelled {
 		if arqObj, err := c.getStreamARQ(packet.StreamID); err == nil {
 			arqObj.MarkSocksFailed(Enums.PACKET_STREAM_RST)
@@ -530,6 +534,11 @@ func (c *Client) HandleSocksFailure(packet VpnProto.Packet) error {
 	s, ok := c.getStream(packet.StreamID)
 	if !ok || s == nil {
 		c.handleMissingStreamPacket(packet)
+		return nil
+	}
+
+	switch s.StatusValue() {
+	case streamStatusSocksFailed, streamStatusDraining, streamStatusClosing, streamStatusTimeWait, streamStatusClosed:
 		return nil
 	}
 

@@ -1749,7 +1749,6 @@ func (s *Server) handleStreamRSTRequest(vpnPacket VpnProto.Packet, sessionRecord
 		stream.Status = "CLOSED"
 		stream.CloseTime = now
 		stream.mu.Unlock()
-		record.removeStream(vpnPacket.StreamID, now)
 	} else {
 		record.noteStreamClosed(vpnPacket.StreamID, now)
 	}
@@ -1780,11 +1779,20 @@ func (s *Server) handleStreamAckPacket(vpnPacket VpnProto.Packet, sessionRecord 
 
 	if handledAck && vpnPacket.PacketType == Enums.PACKET_STREAM_RST_ACK {
 		s.removeStreamDataFragmentsForStream(vpnPacket.SessionID, vpnPacket.StreamID)
-		record.removeStream(vpnPacket.StreamID, now)
+		stream.mu.Lock()
+		stream.Status = "CLOSED"
+		if stream.CloseTime.IsZero() {
+			stream.CloseTime = now
+		}
+		stream.mu.Unlock()
 	} else if handledAck && vpnPacket.PacketType == Enums.PACKET_STREAM_FIN_ACK {
-		// If ARQ considers it done, we can remove it.
 		if stream.ARQ.IsClosed() {
-			record.removeStream(vpnPacket.StreamID, now)
+			stream.mu.Lock()
+			stream.Status = "CLOSED"
+			if stream.CloseTime.IsZero() {
+				stream.CloseTime = now
+			}
+			stream.mu.Unlock()
 		}
 	}
 

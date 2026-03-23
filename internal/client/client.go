@@ -174,12 +174,19 @@ func (c *Client) HandleStreamPacket(packet VpnProto.Packet) error {
 		arqObj.MarkFinReceived(packet.SequenceNum)
 	case Enums.PACKET_STREAM_RST:
 		arqObj.MarkRstReceived(packet.SequenceNum)
-		c.removeStream(packet.StreamID)
+		arqObj.Abort("peer reset received", false)
+		s.MarkTerminal(time.Now())
+		if s.StatusValue() != streamStatusCancelled {
+			s.SetStatus(streamStatusTimeWait)
+		}
 	default:
 		handledAck := arqObj.HandleAckPacket(packet.PacketType, packet.SequenceNum, packet.FragmentID)
 		if handledAck && (packet.PacketType == Enums.PACKET_STREAM_RST_ACK || packet.PacketType == Enums.PACKET_STREAM_FIN_ACK) {
 			if s.StatusValue() == streamStatusCancelled || arqObj.IsClosed() {
-				c.removeStream(packet.StreamID)
+				s.MarkTerminal(time.Now())
+				if s.StatusValue() != streamStatusCancelled {
+					s.SetStatus(streamStatusTimeWait)
+				}
 			}
 		}
 	}
