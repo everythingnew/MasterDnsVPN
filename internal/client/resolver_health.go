@@ -17,7 +17,6 @@ type resolverHealthEvent struct {
 type resolverHealthState struct {
 	Events           []resolverHealthEvent
 	TimeoutOnlySince time.Time
-	LastDebugAt      time.Time
 	LastSuccessAt    time.Time
 }
 
@@ -157,7 +156,6 @@ func (c *Client) noteResolverTimeout(serverKey string, at time.Time) {
 	}
 	c.recordResolverHealthEvent(serverKey, false, at)
 }
-
 func (c *Client) recordResolverHealthEvent(serverKey string, success bool, now time.Time) {
 	if c == nil || serverKey == "" {
 		return
@@ -192,28 +190,6 @@ func (c *Client) recordResolverHealthEvent(serverKey string, success bool, now t
 	} else if state.TimeoutOnlySince.IsZero() {
 		state.TimeoutOnlySince = state.Events[0].At
 	}
-
-	if c.resolverHealthDebugEnabled() && c.shouldLogResolverTimeoutLocked(state, now) {
-		span := time.Duration(0)
-		if len(state.Events) >= 2 {
-			span = state.Events[len(state.Events)-1].At.Sub(state.Events[0].At)
-		}
-		oldestAge := now.Sub(state.Events[0].At)
-		timeoutOnlyAge := time.Duration(0)
-		if !state.TimeoutOnlySince.IsZero() {
-			timeoutOnlyAge = now.Sub(state.TimeoutOnlySince)
-		}
-		c.log.Debugf(
-			"\U0001F4C9 <cyan>Resolver timeout observed</cyan> <magenta>|</magenta> <blue>Resolver</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Events</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Successes</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Span</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>OldestAge</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>TimeoutOnlyAge</blue>: <cyan>%s</cyan>",
-			serverKey,
-			len(state.Events),
-			boolToInt(!state.LastSuccessAt.IsZero() && now.Sub(state.LastSuccessAt) <= c.autoDisableTimeoutWindow()),
-			span.Round(time.Millisecond),
-			oldestAge.Round(time.Millisecond),
-			timeoutOnlyAge.Round(time.Millisecond),
-		)
-		state.LastDebugAt = now
-	}
 }
 
 func (c *Client) insertResolverHealthEventLocked(state *resolverHealthState, event resolverHealthEvent) {
@@ -232,25 +208,6 @@ func (c *Client) insertResolverHealthEventLocked(state *resolverHealthState, eve
 	state.Events = append(state.Events, resolverHealthEvent{})
 	copy(state.Events[insertAt+1:], state.Events[insertAt:])
 	state.Events[insertAt] = event
-}
-
-func (c *Client) shouldLogResolverTimeoutLocked(state *resolverHealthState, now time.Time) bool {
-	if state == nil {
-		return false
-	}
-	if state.LastDebugAt.IsZero() {
-		return true
-	}
-	if now.Sub(state.LastDebugAt) >= 500*time.Millisecond {
-		return true
-	}
-	if len(state.Events) <= 3 {
-		return true
-	}
-	if !state.TimeoutOnlySince.IsZero() && now.Sub(state.TimeoutOnlySince) >= c.autoDisableTimeoutWindow() {
-		return true
-	}
-	return false
 }
 
 func (c *Client) retractResolverTimeoutEvent(serverKey string, timedOutAt time.Time, now time.Time) {
