@@ -136,7 +136,6 @@ MTU_SERVERS_FILE_FORMAT = "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}"
 MTU_USING_SECTION_SEPARATOR_TEXT = ""
 MTU_REMOVED_SERVER_LOG_FORMAT = ""
 MTU_ADDED_SERVER_LOG_FORMAT = ""
-PACKET_DUPLICATION_COUNT = 2
 
 # ------------------------------------------------------------------------------
 # 6) Logging
