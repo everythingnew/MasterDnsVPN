@@ -995,10 +995,6 @@ func (a *ARQ) ReceiveAck(packetType uint8, sn uint16) bool {
 // Control Plane Verification
 // ---------------------------------------------------------------------
 
-func (a *ARQ) SendControlPacket(packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, payload []byte, priority int, trackForAck bool, customAckType *uint8) bool {
-	return a.SendControlPacketWithTTL(packetType, sequenceNum, fragmentID, totalFragments, payload, priority, trackForAck, customAckType, 0)
-}
-
 func (a *ARQ) SendControlPacketWithTTL(packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, payload []byte, priority int, trackForAck bool, customAckType *uint8, ttl time.Duration) bool {
 	copyData := append([]byte(nil), payload...)
 	priority = Enums.NormalizePacketPriority(packetType, priority)

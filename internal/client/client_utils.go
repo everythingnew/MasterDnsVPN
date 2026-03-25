@@ -231,12 +231,23 @@ func (c *Client) handleMissingStreamPacket(packet VpnProto.Packet) bool {
 		return false
 	}
 
+	if packet.PacketType == Enums.PACKET_PACKED_CONTROL_BLOCKS ||
+		packet.PacketType == Enums.PACKET_PONG ||
+		packet.PacketType == Enums.PACKET_DNS_QUERY_RES {
+		return false
+	}
+
 	// No need to send Response for ACK packets
 	if packet.PacketType == Enums.PACKET_STREAM_DATA_ACK {
 		return true
 	}
 
 	if _, ok := Enums.ReverseControlAckFor(packet.PacketType); ok {
+		return true
+	}
+
+	if packet.PacketType == Enums.PACKET_STREAM_RST {
+		c.enqueueOrphanReset(Enums.PACKET_STREAM_RST_ACK, packet.StreamID, packet.SequenceNum)
 		return true
 	}
 
