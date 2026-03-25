@@ -29,10 +29,10 @@ const (
 	maxServerSessionSlots       = 255
 	sessionInitTTL              = 10 * time.Minute
 	sessionInitDataSize         = 10
-	minSessionMTU               = 30
+	minSessionMTU               = 10
 	maxSessionMTU               = 4096
-	serverClosedStreamRecordTTL = 45 * time.Second
-	serverClosedStreamRecordCap = 1000
+	serverClosedStreamRecordTTL = 600 * time.Second
+	serverClosedStreamRecordCap = 2000
 )
 
 type QueueTarget uint8
@@ -479,9 +479,11 @@ func clampMTU(value uint16) uint16 {
 	if value < minSessionMTU {
 		return minSessionMTU
 	}
+
 	if value > maxSessionMTU {
 		return maxSessionMTU
 	}
+
 	return value
 }
 

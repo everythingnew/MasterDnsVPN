@@ -57,9 +57,6 @@ func (s *Server) validatePostSessionPacket(questionPacket []byte, requestName st
 		return postSessionValidation{}
 	}
 
-	if s.debugLoggingEnabled() {
-		s.logInvalidSessionThreshold(vpnPacket.SessionID, vpnPacket.SessionCookie, validation.Lookup, validation.Known)
-	}
 	s.logInvalidSessionDrop("invalid cookie threshold", vpnPacket.SessionID, vpnPacket.SessionCookie, validation.Lookup.Cookie, validation.Lookup.ResponseMode)
 
 	return postSessionValidation{
@@ -89,34 +86,6 @@ func (s *Server) handleSessionCloseNotice(vpnPacket VpnProto.Packet, now time.Ti
 			vpnPacket.SessionID,
 		)
 	}
-}
-
-func (s *Server) logInvalidSessionThreshold(sessionID uint8, receivedCookie uint8, lookup sessionLookupResult, known bool) {
-	if !known {
-		s.log.Debugf(
-			"\U0001F9D7 <yellow>Unknown Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
-			sessionID,
-			receivedCookie,
-		)
-		return
-	}
-
-	if lookup.State == sessionLookupClosed {
-		s.log.Debugf(
-			"\U0001F9D7 <yellow>Stale Closed Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Expected: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
-			sessionID,
-			lookup.Cookie,
-			receivedCookie,
-		)
-		return
-	}
-
-	s.log.Debugf(
-		"\U0001F9D7 <yellow>Invalid Session Cookie Threshold Reached, Session: <cyan>%d</cyan>, Expected: <cyan>%d</cyan>, Received: <cyan>%d</cyan></yellow>",
-		sessionID,
-		lookup.Cookie,
-		receivedCookie,
-	)
 }
 
 func (s *Server) logInvalidSessionDrop(reason string, sessionID uint8, receivedCookie uint8, expectedCookie uint8, responseMode uint8) {
@@ -482,9 +451,11 @@ func (s *Server) nextUnknownInvalidDropMode() uint8 {
 	if s == nil {
 		return mtuProbeModeRaw
 	}
+
 	if s.invalidDropMode.Add(1)&1 == 0 {
 		return mtuProbeModeRaw
 	}
+
 	return mtuProbeModeBase64
 }
 

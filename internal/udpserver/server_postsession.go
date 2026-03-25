@@ -30,8 +30,6 @@ func (s *Server) handlePostSessionPacket(decision domainMatcher.Decision, vpnPac
 		return s.handleStreamDataRequest(vpnPacket, sessionRecord)
 	case Enums.PACKET_DNS_QUERY_REQ:
 		return s.handleDNSQueryRequest(decision, vpnPacket, sessionRecord)
-	case Enums.PACKET_DNS_QUERY_RES_ACK:
-		return s.handleDNSQueryResponseAck(vpnPacket, sessionRecord)
 	case Enums.PACKET_STREAM_SYN:
 		return s.handleStreamSynRequest(vpnPacket, sessionRecord)
 	case Enums.PACKET_SOCKS5_SYN:
@@ -75,14 +73,6 @@ func (s *Server) enqueueMissingStreamReset(record *sessionRecord, vpnPacket VpnP
 		record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
 	}
 	return true
-}
-
-func (s *Server) handleMissingStreamPacket(record *sessionRecord, vpnPacket VpnProto.Packet) bool {
-	if s == nil {
-		return false
-	}
-
-	return s.enqueueMissingStreamReset(record, vpnPacket)
 }
 
 func isStreamCreationPacketType(packetType uint8) bool {
@@ -170,7 +160,7 @@ func (s *Server) queueImmediateControlAck(record *sessionRecord, packet VpnProto
 			Enums.DefaultPacketPriority(ackType),
 			false,
 			nil,
-			600*time.Second,
+			400*time.Second,
 		)
 	}
 
@@ -202,13 +192,13 @@ func (s *Server) preprocessInboundPacket(vpnPacket VpnProto.Packet) bool {
 			record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
 			return true
 		default:
-			return s.handleMissingStreamPacket(record, vpnPacket)
+			return s.enqueueMissingStreamReset(record, vpnPacket)
 		}
 	}
 
 	existingStream, streamExists := record.getStream(vpnPacket.StreamID)
 	if vpnPacket.StreamID != 0 && (!streamExists || existingStream == nil) {
-		return s.handleMissingStreamPacket(record, vpnPacket)
+		return s.enqueueMissingStreamReset(record, vpnPacket)
 	}
 
 	_ = s.queueImmediateControlAck(record, vpnPacket)
