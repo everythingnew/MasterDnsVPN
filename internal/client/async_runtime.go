@@ -25,6 +25,7 @@ type asyncPacket struct {
 	conn       Connection
 	payload    []byte
 	packetType uint8
+	streamID   uint16
 }
 
 type asyncReadPacket struct {

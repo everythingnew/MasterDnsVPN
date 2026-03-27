@@ -122,11 +122,11 @@ SETUP_PACKET_DUPLICATION_COUNT = 2
 # Stream-aware resolver failover.
 # If a stream keeps resending on the same preferred resolver, it can move.
 # Threshold is clamped to [1, 128].
-STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD = 2
+STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD = 100
 
 # Minimum seconds between preferred-resolver switches for the same stream.
 # Clamped to [0.1s, 120s].
-STREAM_RESOLVER_FAILOVER_COOLDOWN = 1.0
+STREAM_RESOLVER_FAILOVER_COOLDOWN = 60.0
 
 # If true, resolvers rejected during initial MTU testing are rechecked in the
 # background using the current synced upload/download MTUs.

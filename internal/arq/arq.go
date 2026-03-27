@@ -94,7 +94,7 @@ var setupControlPacketTypes = map[uint8]bool{
 }
 
 type ARQ struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 
 	streamID             uint16
 	sessionID            uint8
@@ -442,17 +442,19 @@ func (a *ARQ) signalWindowNotFull() {
 }
 
 func (a *ARQ) waitWindowNotFull() {
-	select {
-	case <-a.windowNotFull:
-		a.signalWindowNotFull()
-	case <-a.ctx.Done():
-	}
-}
+	for {
+		a.mu.RLock()
+		if len(a.sndBuf) < a.limit || a.closed {
+			a.mu.RUnlock()
+			return
+		}
+		a.mu.RUnlock()
 
-func (a *ARQ) clearWindowNotFull() {
-	select {
-	case <-a.windowNotFull:
-	default:
+		select {
+		case <-a.windowNotFull:
+		case <-a.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -695,10 +697,6 @@ func (a *ARQ) ioLoop() {
 				CompressionType: a.compressionType,
 				TTL:             0,
 			}
-
-			if len(a.sndBuf) >= a.limit {
-				a.clearWindowNotFull()
-			}
 			a.mu.Unlock()
 
 			a.enqueuer.PushTXPacket(
@@ -920,17 +918,14 @@ func (a *ARQ) retransmitLoop() {
 			rtoFactor = a.controlRto
 		}
 
-		baseInterval := rtoFactor / 3
-		if baseInterval < 50*time.Millisecond {
-			baseInterval = 50 * time.Millisecond
-		}
+		baseInterval := max(rtoFactor/3, 20*time.Millisecond)
 
 		hasPending := len(a.sndBuf) > 0 || (a.enableControlReliability && len(a.controlSndBuf) > 0)
 		a.mu.Unlock()
 
 		interval := baseInterval
 		if !hasPending {
-			interval = max(baseInterval*4, 200*time.Millisecond)
+			interval = max(baseInterval*4, 100*time.Millisecond)
 		}
 
 		timer := time.NewTimer(interval)

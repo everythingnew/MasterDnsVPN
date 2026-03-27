@@ -242,6 +242,7 @@ func (b *Balancer) GetUniqueConnections(requiredCount int) []Connection {
 	if count <= 0 {
 		return nil
 	}
+
 	if count == 1 {
 		best, ok := b.GetBestConnection()
 		if !ok {
@@ -302,12 +303,15 @@ func normalizeRequiredCount(validCount, requiredCount, defaultIfInvalid int) int
 	if validCount <= 0 {
 		return 0
 	}
+
 	if requiredCount <= 0 {
 		requiredCount = defaultIfInvalid
 	}
+
 	if requiredCount > validCount {
 		return validCount
 	}
+
 	return requiredCount
 }
 

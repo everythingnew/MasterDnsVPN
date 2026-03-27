@@ -15,19 +15,26 @@ func (c *Client) runtimePacketDuplicationCount(packetType uint8) int {
 	if count < 1 {
 		count = 1
 	}
-	if packetType == Enums.PACKET_STREAM_SYN || packetType == Enums.PACKET_SOCKS5_SYN {
+
+	if packetType == Enums.PACKET_STREAM_SYN ||
+		packetType == Enums.PACKET_PACKED_CONTROL_BLOCKS ||
+		packetType == Enums.PACKET_SOCKS5_SYN ||
+		packetType == Enums.PACKET_STREAM_FIN {
 		if c.cfg.SetupPacketDuplicationCount > count {
 			count = c.cfg.SetupPacketDuplicationCount
 		}
 	}
+
 	return count
 }
 
 func (c *Client) selectTargetConnectionsForPacket(packetType uint8, streamID uint16) ([]Connection, error) {
 	targetCount := c.runtimePacketDuplicationCount(packetType)
+
 	if c == nil || c.balancer == nil || streamID == 0 || c.balancer.ValidCount() <= 0 {
 		return c.selectUniqueRuntimeConnections(targetCount)
 	}
+
 	if packetType != Enums.PACKET_STREAM_DATA && packetType != Enums.PACKET_STREAM_RESEND {
 		return c.selectUniqueRuntimeConnections(targetCount)
 	}
@@ -41,14 +48,17 @@ func (c *Client) selectTargetConnectionsForPacket(packetType uint8, streamID uin
 		preferred Connection
 		found     bool
 	)
+
 	if packetType == Enums.PACKET_STREAM_RESEND {
 		preferred, found = c.selectStreamPreferredConnectionForResend(stream)
 	} else {
 		preferred, found = c.ensureStreamPreferredConnection(stream)
 	}
+
 	if !found {
 		return c.selectUniqueRuntimeConnections(targetCount)
 	}
+
 	if targetCount <= 1 {
 		return []Connection{preferred}, nil
 	}
@@ -95,13 +105,16 @@ func (c *Client) selectUniqueRuntimeConnections(requiredCount int) ([]Connection
 	if c == nil {
 		return nil, ErrNoValidConnections
 	}
+
 	if c.balancer == nil {
 		return nil, ErrNoValidConnections
 	}
+
 	connections := c.balancer.GetUniqueConnections(requiredCount)
 	if len(connections) == 0 {
 		return nil, ErrNoValidConnections
 	}
+
 	return connections, nil
 }
 
@@ -234,9 +247,11 @@ func (c *Client) shouldTransmitQueuedStreamPacket(stream *Stream_client, item *c
 	if c == nil || stream == nil || item == nil {
 		return false
 	}
+
 	if item.PacketType != Enums.PACKET_STREAM_DATA && item.PacketType != Enums.PACKET_STREAM_RESEND {
 		return true
 	}
+
 	arqObj, ok := stream.Stream.(*arq.ARQ)
 	if !ok || arqObj == nil {
 		return false
