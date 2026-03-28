@@ -21,6 +21,7 @@ func (c *Client) selectTargetConnections(packetType uint8, streamID uint16) []Co
 	if err != nil {
 		return nil
 	}
+
 	return connections
 }
 
@@ -112,6 +113,7 @@ dispatchLoop:
 					TotalFragments: p.TotalFragments,
 					Payload:        nil,
 				}
+
 				selectedStreamID = p.StreamID
 				selectedID = -1
 				ok = true
@@ -303,6 +305,7 @@ dispatchLoop:
 		}
 
 		c.pingManager.NotifyPacket(finalPacket.packetType, false)
+		finalPacket.streamID = selectedStreamID
 
 		conns := c.selectTargetConnections(finalPacket.packetType, selectedStreamID)
 		if len(conns) == 0 {

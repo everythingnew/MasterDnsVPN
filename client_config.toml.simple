@@ -122,11 +122,11 @@ SETUP_PACKET_DUPLICATION_COUNT = 2
 # Stream-aware resolver failover.
 # If a stream keeps resending on the same preferred resolver, it can move.
 # Threshold is clamped to [1, 128].
-STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD = 100
+STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD = 4
 
 # Minimum seconds between preferred-resolver switches for the same stream.
 # Clamped to [0.1s, 120s].
-STREAM_RESOLVER_FAILOVER_COOLDOWN = 60.0
+STREAM_RESOLVER_FAILOVER_COOLDOWN = 8.0
 
 # If true, resolvers rejected during initial MTU testing are rechecked in the
 # background using the current synced upload/download MTUs.
@@ -150,15 +150,15 @@ AUTO_DISABLE_TIMEOUT_SERVERS = true
 
 # Timeout-only observation window in seconds.
 # Clamped to [1s, 86400s].
-AUTO_DISABLE_TIMEOUT_WINDOW_SECONDS = 60.0
+AUTO_DISABLE_TIMEOUT_WINDOW_SECONDS = 90.0
 
 # Minimum observations required before auto-disable can trigger.
 # Clamped to [1, 10000].
-AUTO_DISABLE_MIN_OBSERVATIONS = 6
+AUTO_DISABLE_MIN_OBSERVATIONS = 8
 
 # Frequency of auto-disable evaluation.
 # Clamped to [0.25s, 600s].
-AUTO_DISABLE_CHECK_INTERVAL_SECONDS = 3.0
+AUTO_DISABLE_CHECK_INTERVAL_SECONDS = 4.0
 
 # If true, payload labels are base-encoded before tunneling.
 # Usually keep false unless a specific resolver path behaves better with it.
