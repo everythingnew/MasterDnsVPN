@@ -19,7 +19,9 @@ import (
 	"masterdnsvpn-go/internal/arq"
 	"masterdnsvpn-go/internal/client/handlers"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
+	Enums "masterdnsvpn-go/internal/enums"
 	fragmentStore "masterdnsvpn-go/internal/fragmentstore"
+	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
 const clientRXDropLogInterval = 2 * time.Second
@@ -511,24 +513,24 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr) {
 	if err != nil {
 		if errors.Is(err, DnsParser.ErrTXTAnswerMissing) {
 			receivedAt := time.Now()
-			// summary := DnsParser.DescribeResponseWithoutTunnelPayload(data)
+			summary := DnsParser.DescribeResponseWithoutTunnelPayload(data)
 			if parsed, parseErr := DnsParser.ParsePacketLite(data); parseErr == nil && parsed.Header.RCode != 0 {
 				c.trackResolverFailure(data, addr, receivedAt)
 			} else {
 				c.trackResolverSuccess(data, addr, receivedAt)
 			}
-			// c.log.Debugf("DNS response from %v had no tunnel TXT payload | %s", addr, summary)
+			c.log.Debugf("DNS response from %v had no tunnel TXT payload | %s", addr, summary)
 			return
 		}
-		// c.log.Debugf("\U0001F6A8 <red>Failed to parse VPN packet from DNS response: %v from %v</red>", err, addr)
+		c.log.Debugf("\U0001F6A8 <red>Failed to parse VPN packet from DNS response: %v from %v</red>", err, addr)
 		return
 	}
 
-	// packedSummary := ""
-	// if vpnPacket.PacketType == Enums.PACKET_PACKED_CONTROL_BLOCKS {
-	// 	packedSummary = " | " + VpnProto.DescribePackedControlBlocks(vpnPacket.Payload, 4)
-	// }
-	// c.logInboundPacket(vpnPacket.PacketType, vpnPacket.SessionID, len(vpnPacket.Payload), vpnPacket.StreamID, vpnPacket.SequenceNum, vpnPacket.FragmentID, vpnPacket.TotalFragments, packedSummary)
+	packedSummary := ""
+	if vpnPacket.PacketType == Enums.PACKET_PACKED_CONTROL_BLOCKS {
+		packedSummary = " | " + VpnProto.DescribePackedControlBlocks(vpnPacket.Payload, 4)
+	}
+	c.logInboundPacket(vpnPacket.PacketType, vpnPacket.SessionID, len(vpnPacket.Payload), vpnPacket.StreamID, vpnPacket.SequenceNum, vpnPacket.FragmentID, vpnPacket.TotalFragments, packedSummary)
 	c.trackResolverSuccess(data, addr, time.Now())
 
 	// 2. Notify activity monitor (PingManager)

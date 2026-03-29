@@ -8,7 +8,9 @@
 package udpserver
 
 import (
+	"context"
 	"encoding/binary"
+	"fmt"
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
@@ -91,6 +93,11 @@ func (s *Server) logInvalidSessionDrop(reason string, sessionID uint8, receivedC
 	if !s.debugLoggingEnabled() {
 		return
 	}
+	now := time.Now()
+	logKey, interval := invalidSessionDropLogConfig(reason, sessionID, receivedCookie, expectedCookie, responseMode)
+	if !s.invalidSessionDropLog.allow(logKey, now, interval) {
+		return
+	}
 	if expectedCookie == 0 {
 		s.log.Debugf(
 			"\U0001F44B <yellow>Sending Session Drop</yellow> <magenta>|</magenta> <blue>Reason</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Received</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Mode</blue>: <cyan>%s</cyan>",
@@ -109,6 +116,19 @@ func (s *Server) logInvalidSessionDrop(reason string, sessionID uint8, receivedC
 		receivedCookie,
 		sessionResponseModeName(responseMode),
 	)
+}
+
+func invalidSessionDropLogConfig(reason string, sessionID uint8, receivedCookie uint8, expectedCookie uint8, responseMode uint8) (string, time.Duration) {
+	switch reason {
+	case "recently closed session":
+		return fmt.Sprintf("recently-closed:%d:%d:%d", sessionID, expectedCookie, responseMode), 3 * time.Second
+	case "invalid cookie threshold":
+		return fmt.Sprintf("invalid-cookie:%d:%d:%d", sessionID, expectedCookie, responseMode), 1500 * time.Millisecond
+	case "unknown session":
+		return fmt.Sprintf("unknown-session:%d:%d", sessionID, responseMode), 1500 * time.Millisecond
+	default:
+		return fmt.Sprintf("%s:%d:%d:%d", reason, sessionID, expectedCookie, responseMode), time.Second
+	}
 }
 
 func (s *Server) buildInvalidSessionErrorResponse(questionPacket []byte, requestName string, sessionID uint8, responseMode uint8) []byte {
@@ -212,6 +232,13 @@ func (s *Server) cleanupClosedSession(sessionID uint8, record *sessionRecord) {
 	if record != nil {
 		record.closeAllStreams("session closed cleanup")
 	}
+	s.cleanupDeferredSessionState(sessionID)
+}
+
+func (s *Server) cleanupDeferredSessionState(sessionID uint8) {
+	if s == nil || sessionID == 0 {
+		return
+	}
 	if s.deferredDNSSession != nil {
 		s.deferredDNSSession.RemoveSession(sessionID)
 	}
@@ -221,11 +248,29 @@ func (s *Server) cleanupClosedSession(sessionID uint8, record *sessionRecord) {
 	s.removeDNSQueryFragmentsForSession(sessionID)
 }
 
+func (s *Server) cleanupIdleDeferredSession(sessionID uint8, lastActivityNano int64, now time.Time) {
+	if s == nil || sessionID == 0 {
+		return
+	}
+
+	s.clearDeferredPacketsForSession(sessionID)
+	s.removeSOCKS5SynFragmentsForSession(sessionID)
+	s.cleanupDeferredSessionState(sessionID)
+}
+
 func (s *Server) cleanupStreamArtifacts(sessionID uint8, streamID uint16) {
 	if s == nil || sessionID == 0 || streamID == 0 {
 		return
 	}
 	s.clearDeferredPacketsForStream(sessionID, streamID)
+	s.removeSOCKS5SynFragmentsForStream(sessionID, streamID)
+}
+
+func (s *Server) finalizeStreamArtifacts(sessionID uint8, streamID uint16) {
+	if s == nil || sessionID == 0 || streamID == 0 {
+		return
+	}
+	s.finalizeDeferredPacketsForStream(sessionID, streamID)
 	s.removeSOCKS5SynFragmentsForStream(sessionID, streamID)
 }
 
@@ -599,7 +644,7 @@ func isDeferredPostSessionPacketType(packetType uint8) bool {
 	}
 }
 
-func (s *Server) dispatchDeferredSessionPacket(packet VpnProto.Packet, run func()) bool {
+func (s *Server) dispatchDeferredSessionPacket(packet VpnProto.Packet, run func(context.Context)) bool {
 	if s == nil || !isDeferredPostSessionPacketType(packet.PacketType) {
 		return false
 	}

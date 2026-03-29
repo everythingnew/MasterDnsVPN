@@ -8,6 +8,7 @@
 package udpserver
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strconv"
@@ -19,7 +20,26 @@ import (
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
-func (s *Server) processDeferredDNSQuery(sessionID uint8, sessionCookie uint8, sequenceNum uint16, downloadCompression uint8, downloadMTUBytes int, assembledQuery []byte) {
+const maxDeferredConnectAttemptTimeout = 15 * time.Second
+
+func (s *Server) deferredConnectAttemptTimeout() time.Duration {
+	timeout := s.socksConnectTimeout
+	if timeout <= 0 {
+		timeout = s.cfg.SOCKSConnectTimeout()
+	}
+	if timeout <= 0 {
+		timeout = 8 * time.Second
+	}
+	if timeout > maxDeferredConnectAttemptTimeout {
+		return maxDeferredConnectAttemptTimeout
+	}
+	return timeout
+}
+
+func (s *Server) processDeferredDNSQuery(ctx context.Context, sessionID uint8, sessionCookie uint8, sequenceNum uint16, downloadCompression uint8, downloadMTUBytes int, assembledQuery []byte) {
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
 	if !s.shouldExecuteDeferredPacket(VpnProto.Packet{SessionID: sessionID, SessionCookie: sessionCookie, StreamID: 0}) {
 		return
 	}
@@ -40,6 +60,9 @@ func (s *Server) processDeferredDNSQuery(sessionID uint8, sessionCookie uint8, s
 
 	totalFragments := uint8(len(fragments))
 	for fragmentID, fragmentPayload := range fragments {
+		if ctx != nil && ctx.Err() != nil {
+			return
+		}
 		if !s.shouldExecuteDeferredPacket(VpnProto.Packet{SessionID: sessionID, SessionCookie: sessionCookie, StreamID: 0}) {
 			return
 		}
@@ -55,7 +78,17 @@ func (s *Server) processDeferredDNSQuery(sessionID uint8, sessionCookie uint8, s
 	}
 }
 
-func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet) {
+func (s *Server) finalizeDeferredConnectStream(sessionID uint8, streamID uint16, kind string, outcome string) {
+	if s == nil || sessionID == 0 || streamID == 0 {
+		return
+	}
+	s.finalizeDeferredPacketsForStream(sessionID, streamID)
+}
+
+func (s *Server) processDeferredStreamSyn(ctx context.Context, vpnPacket VpnProto.Packet) {
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
 	if !s.shouldExecuteDeferredPacket(vpnPacket) {
 		return
 	}
@@ -83,6 +116,7 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet) {
 			nil,
 			s.cfg.StreamFailurePacketTTL(),
 		)
+		s.finalizeDeferredConnectStream(vpnPacket.SessionID, vpnPacket.StreamID, "stream", "forward-disabled")
 		return
 	}
 
@@ -107,6 +141,7 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet) {
 			nil,
 			s.cfg.StreamResultPacketTTL(),
 		)
+		s.finalizeDeferredConnectStream(vpnPacket.SessionID, vpnPacket.StreamID, "stream", "already-connected")
 		return
 	}
 
@@ -114,8 +149,19 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet) {
 		return
 	}
 
-	upstreamConn, err := s.dialTCPTarget(net.JoinHostPort(s.cfg.ForwardIP, strconv.Itoa(s.cfg.ForwardPort)))
+	attemptTimeout := s.deferredConnectAttemptTimeout()
+	attemptCtx, cancelAttempt := context.WithTimeout(ctx, attemptTimeout)
+	defer cancelAttempt()
+
+	upstreamConn, err := s.dialTCPTargetContext(attemptCtx, net.JoinHostPort(s.cfg.ForwardIP, strconv.Itoa(s.cfg.ForwardPort)))
+
 	if err != nil {
+		timedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
+		cancelled := ctx != nil && ctx.Err() != nil && !timedOut
+
+		if cancelled {
+			return
+		}
 		if !s.shouldExecuteDeferredPacket(vpnPacket) {
 			return
 		}
@@ -130,16 +176,37 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet) {
 			nil,
 			s.cfg.StreamFailurePacketTTL(),
 		)
+		s.finalizeDeferredConnectStream(vpnPacket.SessionID, vpnPacket.StreamID, "stream", "dial-error")
+		return
+	}
+	if upstreamConn == nil {
+		if !s.shouldExecuteDeferredPacket(vpnPacket) {
+			return
+		}
+		stream.ARQ.SendControlPacketWithTTL(
+			Enums.PACKET_STREAM_CONNECT_FAIL,
+			vpnPacket.SequenceNum,
+			0,
+			0,
+			nil,
+			Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CONNECT_FAIL),
+			true,
+			nil,
+			s.cfg.StreamFailurePacketTTL(),
+		)
+		s.finalizeDeferredConnectStream(vpnPacket.SessionID, vpnPacket.StreamID, "stream", "nil-conn")
 		return
 	}
 
 	if record.isClosed() || !stream.attachUpstreamConn(upstreamConn, s.cfg.ForwardIP, uint16(s.cfg.ForwardPort), "CONNECTED") {
 		_ = upstreamConn.Close()
+		s.finalizeDeferredConnectStream(vpnPacket.SessionID, vpnPacket.StreamID, "stream", "attach-rejected")
 		return
 	}
 
 	if !s.shouldExecuteDeferredPacket(vpnPacket) {
 		_ = upstreamConn.Close()
+		s.finalizeDeferredConnectStream(vpnPacket.SessionID, vpnPacket.StreamID, "stream", "stale-after-dial")
 		return
 	}
 
@@ -156,9 +223,13 @@ func (s *Server) processDeferredStreamSyn(vpnPacket VpnProto.Packet) {
 		s.cfg.StreamResultPacketTTL(),
 	)
 	stream.ARQ.SetIOReady(true)
+	s.finalizeDeferredConnectStream(vpnPacket.SessionID, vpnPacket.StreamID, "stream", "connected")
 }
 
-func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
+func (s *Server) processDeferredSOCKS5Syn(ctx context.Context, vpnPacket VpnProto.Packet) {
+	if ctx != nil && ctx.Err() != nil {
+		return
+	}
 	if !s.shouldExecuteDeferredPacket(vpnPacket) {
 		return
 	}
@@ -214,6 +285,7 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
 			nil,
 			s.cfg.StreamFailurePacketTTL(),
 		)
+		s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
 		return
 	}
 
@@ -240,6 +312,7 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
 				nil,
 				s.cfg.StreamResultPacketTTL(),
 			)
+			s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
 			return
 		}
 
@@ -254,6 +327,7 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
 			nil,
 			s.cfg.StreamFailurePacketTTL(),
 		)
+		s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
 		return
 	}
 
@@ -261,8 +335,20 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
 		return
 	}
 
-	upstreamConn, err := s.dialSOCKSStreamTarget(target.Host, target.Port, assembledTarget)
+	attemptTimeout := s.deferredConnectAttemptTimeout()
+	attemptCtx, cancelAttempt := context.WithTimeout(ctx, attemptTimeout)
+	defer cancelAttempt()
+
+	upstreamConn, err := s.dialSOCKSStreamTargetContext(attemptCtx, target.Host, target.Port, assembledTarget)
+
 	if err != nil {
+		timedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
+		cancelled := ctx != nil && ctx.Err() != nil && !timedOut
+
+		if cancelled {
+			return
+		}
+
 		if !s.shouldExecuteDeferredPacket(vpnPacket) {
 			return
 		}
@@ -289,16 +375,41 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
 			nil,
 			s.cfg.StreamFailurePacketTTL(),
 		)
+		s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
+
+		return
+	}
+	if upstreamConn == nil {
+		if !s.shouldExecuteDeferredPacket(vpnPacket) {
+			return
+		}
+
+		packetType := uint8(Enums.PACKET_SOCKS5_CONNECT_FAIL)
+		stream.ARQ.SendControlPacketWithTTL(
+			packetType,
+			vpnPacket.SequenceNum,
+			0,
+			0,
+			nil,
+			Enums.DefaultPacketPriority(packetType),
+			true,
+			nil,
+			s.cfg.StreamFailurePacketTTL(),
+		)
+		s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
+
 		return
 	}
 
 	if record.isClosed() || !stream.attachUpstreamConn(upstreamConn, target.Host, target.Port, "CONNECTED") {
 		_ = upstreamConn.Close()
+		s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
 		return
 	}
 
 	if !s.shouldExecuteDeferredPacket(vpnPacket) {
 		_ = upstreamConn.Close()
+		s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
 		return
 	}
 
@@ -326,11 +437,16 @@ func (s *Server) processDeferredSOCKS5Syn(vpnPacket VpnProto.Packet) {
 		nil,
 		s.cfg.StreamResultPacketTTL(),
 	)
+	s.finalizeStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
 }
 
 func (s *Server) mapSOCKSConnectError(err error) uint8 {
 	if err == nil {
 		return Enums.PACKET_SOCKS5_CONNECT_FAIL
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return Enums.PACKET_SOCKS5_TTL_EXPIRED
 	}
 
 	var blockedErr *blockedSOCKSTargetError

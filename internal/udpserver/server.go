@@ -74,6 +74,8 @@ type Server struct {
 	packetPool               sync.Pool
 	deferredInflightMu       sync.Mutex
 	deferredInflight         map[uint64]struct{}
+	immediateConnectedLog    throttledLogState
+	invalidSessionDropLog    throttledLogState
 	droppedPackets           atomic.Uint64
 	lastDropLogUnix          atomic.Int64
 	deferredDroppedPackets   atomic.Uint64
@@ -164,6 +166,34 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 			},
 		},
 	}
+}
+
+type throttledLogState struct {
+	mu   sync.Mutex
+	last map[string]int64
+}
+
+func (s *throttledLogState) allow(key string, now time.Time, interval time.Duration) bool {
+	if s == nil {
+		return true
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+
+	nowUnixNano := now.UnixNano()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.last == nil {
+		s.last = make(map[string]int64, 64)
+	}
+
+	last := s.last[key]
+	if last != 0 && nowUnixNano-last < interval.Nanoseconds() {
+		return false
+	}
+	s.last[key] = nowUnixNano
+	return true
 }
 
 func splitDeferredSessionPools(totalWorkers int, totalQueue int) (dnsWorkers int, connectWorkers int, dnsQueue int, connectQueue int) {

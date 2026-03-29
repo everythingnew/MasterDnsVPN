@@ -8,6 +8,7 @@
 package udpserver
 
 import (
+	"context"
 	"io"
 	"testing"
 	"time"
@@ -52,6 +53,16 @@ func newTestServerForCleanup() *Server {
 		socks5Fragments:        fragmentStore.New[socks5FragmentKey](8),
 		deferredDNSSession:     nil,
 		deferredConnectSession: nil,
+	}
+}
+
+func newTestServerForDeferredCleanup() *Server {
+	return &Server{
+		deferredInflight:       make(map[uint64]struct{}, 8),
+		dnsFragments:           fragmentStore.New[dnsFragmentKey](8),
+		socks5Fragments:        fragmentStore.New[socks5FragmentKey](8),
+		deferredDNSSession:     newDeferredSessionProcessor(1, 8, nil),
+		deferredConnectSession: newDeferredSessionProcessor(1, 8, nil),
 	}
 }
 
@@ -231,6 +242,103 @@ func TestSessionStoreCleanupKeepsActiveRecordOpen(t *testing.T) {
 	}
 	if record.isClosed() {
 		t.Fatal("expected active record to remain open during cleanup scan")
+	}
+}
+
+func TestCollectIdleDeferredSessionsMarksIdleActiveSessionOncePerActivityWindow(t *testing.T) {
+	store := newSessionStore(8, 32)
+	record := newTestSessionRecord(31)
+	staleActivity := time.Now().Add(-time.Minute)
+	record.setLastActivity(staleActivity)
+	store.byID[record.ID] = record
+
+	idle := store.CollectIdleDeferredSessions(time.Now(), 10*time.Second)
+	if len(idle) != 1 || idle[0].ID != record.ID {
+		t.Fatalf("expected one idle deferred session cleanup candidate, got %+v", idle)
+	}
+
+	idle = store.CollectIdleDeferredSessions(time.Now(), 10*time.Second)
+	if len(idle) != 0 {
+		t.Fatalf("expected same activity window not to requeue idle cleanup, got %d", len(idle))
+	}
+
+	record.setLastActivity(time.Now())
+	idle = store.CollectIdleDeferredSessions(time.Now().Add(20*time.Second), 10*time.Second)
+	if len(idle) != 1 || idle[0].ID != record.ID {
+		t.Fatalf("expected fresh idle activity window to schedule cleanup again, got %+v", idle)
+	}
+}
+
+func TestCleanupIdleDeferredSessionClearsDeferredStateWithoutClosingSession(t *testing.T) {
+	s := newTestServerForDeferredCleanup()
+	record := newTestSessionRecord(32)
+	record.Cookie = 7
+	record.setLastActivity(time.Now().Add(-time.Minute))
+	s.sessions = newSessionStore(8, 32)
+	s.sessions.byID[record.ID] = record
+
+	packet := VpnProto.Packet{
+		SessionID:     record.ID,
+		SessionCookie: record.Cookie,
+		PacketType:    Enums.PACKET_SOCKS5_SYN,
+		StreamID:      9,
+		SequenceNum:   4,
+	}
+	s.deferredInflight[deferredTrackedPacketKey(packet)] = struct{}{}
+	if _, _, completed := s.socks5Fragments.Collect(
+		socks5FragmentKey{sessionID: record.ID, streamID: 9, sequenceNum: 4},
+		[]byte{0x01, 127, 0, 0, 1, 0x01, 0xBB},
+		0,
+		1,
+		time.Now(),
+		5*time.Minute,
+	); completed {
+		t.Fatal("unexpected completed SOCKS5 fragment state")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.deferredConnectSession.Start(ctx)
+
+	blocked := make(chan struct{})
+	cancelled := make(chan struct{})
+	if !s.deferredConnectSession.Enqueue(deferredSessionLane{sessionID: record.ID, streamID: 9}, func(taskCtx context.Context) {
+		close(blocked)
+		<-taskCtx.Done()
+		close(cancelled)
+	}) {
+		t.Fatal("expected deferred task to enqueue")
+	}
+
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for deferred task to start")
+	}
+
+	s.cleanupIdleDeferredSession(record.ID, record.lastActivity(), time.Now())
+
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected idle deferred cleanup to cancel running deferred task")
+	}
+
+	if record.isClosed() {
+		t.Fatal("expected idle deferred cleanup not to close the session")
+	}
+	if _, exists := s.deferredInflight[deferredTrackedPacketKey(packet)]; exists {
+		t.Fatal("expected idle deferred cleanup to clear inflight markers")
+	}
+	if _, ready, completed := s.socks5Fragments.Collect(
+		socks5FragmentKey{sessionID: record.ID, streamID: 9, sequenceNum: 4},
+		[]byte{0x01, 8, 8, 8, 8, 0x00, 0x35},
+		0,
+		1,
+		time.Now().Add(time.Second),
+		5*time.Minute,
+	); !ready || completed {
+		t.Fatal("expected idle deferred cleanup to clear SOCKS5 fragment state")
 	}
 }
 

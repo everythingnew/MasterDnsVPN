@@ -36,32 +36,33 @@ const (
 type sessionRecord struct {
 	mu sync.RWMutex
 
-	ID                   uint8
-	Cookie               uint8
-	ResponseMode         uint8
-	UploadCompression    uint8
-	DownloadCompression  uint8
-	UploadMTU            uint16
-	DownloadMTU          uint16
-	DownloadMTUBytes     int
-	VerifyCode           [4]byte
-	Signature            [sessionInitDataSize]byte
-	MaxPackedBlocks      int
-	StreamReadBufferSize int
-	CreatedAt            time.Time
-	ReuseUntil           time.Time
-	reuseUntilUnixNano   int64
-	lastActivityUnixNano int64
+	ID                                  uint8
+	Cookie                              uint8
+	ResponseMode                        uint8
+	UploadCompression                   uint8
+	DownloadCompression                 uint8
+	UploadMTU                           uint16
+	DownloadMTU                         uint16
+	DownloadMTUBytes                    int
+	VerifyCode                          [4]byte
+	Signature                           [sessionInitDataSize]byte
+	MaxPackedBlocks                     int
+	StreamReadBufferSize                int
+	CreatedAt                           time.Time
+	ReuseUntil                          time.Time
+	reuseUntilUnixNano                  int64
+	lastActivityUnixNano                int64
+	lastDeferredCleanupActivityUnixNano int64
 
 	// New fields for ARQ refactor
 	Streams                         map[uint16]*Stream_server
 	ActiveStreams                   []uint16 // Sorted list of active stream IDs for Round-Robin
-	activeStreamSetVersion         uint64
-	activeStreamSnapshotIDs        []int32
-	activeStreamSnapshotStreams    []*Stream_server
-	activeStreamSnapshotVersion    uint64
-	RRStreamID                      int32    // Last served stream ID for RR
-	EnqueueSeq                      uint64   // Global sequence for FIFO inside same priority
+	activeStreamSetVersion          uint64
+	activeStreamSnapshotIDs         []int32
+	activeStreamSnapshotStreams     []*Stream_server
+	activeStreamSnapshotVersion     uint64
+	RRStreamID                      int32  // Last served stream ID for RR
+	EnqueueSeq                      uint64 // Global sequence for FIFO inside same priority
 	StreamQueueCap                  int
 	StreamsMu                       sync.RWMutex
 	RecentlyClosed                  map[uint16]recentlyClosedStreamRecord
@@ -156,6 +157,11 @@ type sessionValidationResult struct {
 type closedSessionCleanup struct {
 	ID     uint8
 	record *sessionRecord
+}
+
+type idleDeferredCleanup struct {
+	ID               uint8
+	lastActivityNano int64
 }
 
 type sessionStore struct {
@@ -565,6 +571,50 @@ func (r *sessionRecord) setLastActivityUnixNano(nowUnixNano int64) {
 
 func (r *sessionRecord) lastActivity() int64 {
 	return atomic.LoadInt64(&r.lastActivityUnixNano)
+}
+
+func (s *sessionStore) CollectIdleDeferredSessions(now time.Time, idleTimeout time.Duration) []idleDeferredCleanup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if idleTimeout <= 0 {
+		return nil
+	}
+
+	nowUnixNano := now.UnixNano()
+	idleTimeoutNanos := idleTimeout.Nanoseconds()
+	idle := make([]idleDeferredCleanup, 0, 4)
+
+	for sessionID := 1; sessionID <= maxServerSessionID; sessionID++ {
+		record := s.byID[sessionID]
+		if record == nil || record.isClosed() {
+			continue
+		}
+
+		lastActivityUnixNano := record.lastActivity()
+		if lastActivityUnixNano == 0 || nowUnixNano-lastActivityUnixNano < idleTimeoutNanos {
+			continue
+		}
+		if record.lastDeferredCleanupActivity() == lastActivityUnixNano {
+			continue
+		}
+
+		record.markDeferredCleanupActivity(lastActivityUnixNano)
+		idle = append(idle, idleDeferredCleanup{
+			ID:               uint8(sessionID),
+			lastActivityNano: lastActivityUnixNano,
+		})
+	}
+
+	return idle
+}
+
+func (r *sessionRecord) lastDeferredCleanupActivity() int64 {
+	return atomic.LoadInt64(&r.lastDeferredCleanupActivityUnixNano)
+}
+
+func (r *sessionRecord) markDeferredCleanupActivity(activityUnixNano int64) {
+	atomic.StoreInt64(&r.lastDeferredCleanupActivityUnixNano, activityUnixNano)
 }
 
 func nextSessionID(current uint8) uint8 {

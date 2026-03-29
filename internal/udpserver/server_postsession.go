@@ -8,11 +8,13 @@
 package udpserver
 
 import (
+	"context"
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
 	Enums "masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/logger"
+	SocksProto "masterdnsvpn-go/internal/socksproto"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
@@ -304,7 +306,7 @@ func (s *Server) handlePackedControlBlocksRequest(vpnPacket VpnProto.Packet, ses
 	return handled || sawBlock
 }
 
-func (s *Server) dispatchDeferredSessionPacketOrDrop(vpnPacket VpnProto.Packet, reason string, run func()) bool {
+func (s *Server) dispatchDeferredSessionPacketOrDrop(vpnPacket VpnProto.Packet, reason string, run func(context.Context)) bool {
 	result := s.dispatchDeferredSessionPacketTracked(vpnPacket, reason, run)
 	return result != deferredDispatchDropped
 }
@@ -359,6 +361,13 @@ func (s *Server) clearDeferredPacketsForSession(sessionID uint8) {
 	if s == nil || sessionID == 0 {
 		return
 	}
+	s.clearDeferredInflightForSession(sessionID)
+}
+
+func (s *Server) clearDeferredInflightForSession(sessionID uint8) {
+	if s == nil || sessionID == 0 {
+		return
+	}
 	s.deferredInflightMu.Lock()
 	for key := range s.deferredInflight {
 		if uint8(key>>48) == sessionID {
@@ -369,6 +378,32 @@ func (s *Server) clearDeferredPacketsForSession(sessionID uint8) {
 }
 
 func (s *Server) clearDeferredPacketsForStream(sessionID uint8, streamID uint16) {
+	if s == nil || sessionID == 0 || streamID == 0 {
+		return
+	}
+	s.clearDeferredInflightForStream(sessionID, streamID)
+	if s.deferredConnectSession != nil {
+		s.deferredConnectSession.RemoveLane(deferredSessionLane{
+			sessionID: sessionID,
+			streamID:  streamID,
+		})
+	}
+}
+
+func (s *Server) finalizeDeferredPacketsForStream(sessionID uint8, streamID uint16) {
+	if s == nil || sessionID == 0 || streamID == 0 {
+		return
+	}
+	s.clearDeferredInflightForStream(sessionID, streamID)
+	if s.deferredConnectSession != nil {
+		s.deferredConnectSession.FinalizeLane(deferredSessionLane{
+			sessionID: sessionID,
+			streamID:  streamID,
+		})
+	}
+}
+
+func (s *Server) clearDeferredInflightForStream(sessionID uint8, streamID uint16) {
 	if s == nil || sessionID == 0 || streamID == 0 {
 		return
 	}
@@ -419,7 +454,7 @@ func (s *Server) shouldExecuteDeferredPacket(packet VpnProto.Packet) bool {
 	return !closed
 }
 
-func (s *Server) dispatchDeferredSessionPacketTracked(vpnPacket VpnProto.Packet, reason string, run func()) deferredDispatchResult {
+func (s *Server) dispatchDeferredSessionPacketTracked(vpnPacket VpnProto.Packet, reason string, run func(context.Context)) deferredDispatchResult {
 	if s == nil {
 		return deferredDispatchDropped
 	}
@@ -428,12 +463,12 @@ func (s *Server) dispatchDeferredSessionPacketTracked(vpnPacket VpnProto.Packet,
 		return deferredDispatchAlreadyPending
 	}
 
-	wrappedRun := func() {
+	wrappedRun := func(ctx context.Context) {
 		defer s.finishDeferredPacket(vpnPacket)
-		if !s.isDeferredPacketStillTracked(vpnPacket) || !s.shouldExecuteDeferredPacket(vpnPacket) {
+		if ctx.Err() != nil || !s.isDeferredPacketStillTracked(vpnPacket) || !s.shouldExecuteDeferredPacket(vpnPacket) {
 			return
 		}
-		run()
+		run(ctx)
 	}
 
 	if s.dispatchDeferredSessionPacket(vpnPacket, wrappedRun) {
@@ -501,8 +536,9 @@ func (s *Server) handleDNSQueryRequest(vpnPacket VpnProto.Packet, sessionRecord 
 		return true
 	}
 
-	run := func() {
+	run := func(ctx context.Context) {
 		s.processDeferredDNSQuery(
+			ctx,
 			vpnPacket.SessionID,
 			vpnPacket.SessionCookie,
 			vpnPacket.SequenceNum,
@@ -525,13 +561,154 @@ func (s *Server) handleDNSQueryRequest(vpnPacket VpnProto.Packet, sessionRecord 
 	return true
 }
 
+func (s *Server) tryHandleImmediateConnectedStreamSyn(vpnPacket VpnProto.Packet) bool {
+	if s == nil || vpnPacket.SessionID == 0 || vpnPacket.StreamID == 0 {
+		return false
+	}
+
+	record, ok := s.sessions.Get(vpnPacket.SessionID)
+	if !ok || record == nil {
+		return false
+	}
+
+	stream, exists := record.getStream(vpnPacket.StreamID)
+	if !exists || stream == nil || stream.ARQ == nil {
+		return false
+	}
+
+	stream.mu.RLock()
+	connected := stream.Connected
+	targetMatches := stream.TargetHost == s.cfg.ForwardIP && stream.TargetPort == uint16(s.cfg.ForwardPort)
+	stream.mu.RUnlock()
+	if !connected || !targetMatches {
+		return false
+	}
+
+	stream.ARQ.SendControlPacketWithTTL(
+		Enums.PACKET_STREAM_CONNECTED,
+		vpnPacket.SequenceNum,
+		0,
+		0,
+		nil,
+		Enums.DefaultPacketPriority(Enums.PACKET_STREAM_CONNECTED),
+		true,
+		nil,
+		s.cfg.StreamResultPacketTTL(),
+	)
+	s.clearDeferredPacketsForStream(vpnPacket.SessionID, vpnPacket.StreamID)
+	return true
+}
+
+func (s *Server) tryHandleImmediateConnectedSOCKS5Syn(vpnPacket VpnProto.Packet) bool {
+	if s == nil || vpnPacket.SessionID == 0 || vpnPacket.StreamID == 0 {
+		return false
+	}
+	if vpnPacket.TotalFragments > 1 {
+		return false
+	}
+
+	record, ok := s.sessions.Get(vpnPacket.SessionID)
+	if !ok || record == nil {
+		return false
+	}
+
+	stream, exists := record.getStream(vpnPacket.StreamID)
+	if !exists || stream == nil || stream.ARQ == nil {
+		return false
+	}
+
+	stream.mu.RLock()
+	connected := stream.Connected
+	currentHost := stream.TargetHost
+	currentPort := stream.TargetPort
+	stream.mu.RUnlock()
+	if !connected {
+		return false
+	}
+
+	target, err := SocksProto.ParseTargetPayload(vpnPacket.Payload)
+	if err != nil {
+		return false
+	}
+
+	packetType := uint8(Enums.PACKET_SOCKS5_CONNECTED)
+	if currentHost != target.Host || currentPort != target.Port {
+		packetType = Enums.PACKET_SOCKS5_CONNECT_FAIL
+	}
+
+	stream.ARQ.SendControlPacketWithTTL(
+		packetType,
+		vpnPacket.SequenceNum,
+		0,
+		0,
+		nil,
+		Enums.DefaultPacketPriority(packetType),
+		true,
+		nil,
+		s.cfg.StreamResultPacketTTL(),
+	)
+	s.cleanupStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
+	return true
+}
+
+func (s *Server) tryHandleImmediateRejectedSOCKS5Syn(vpnPacket VpnProto.Packet) bool {
+	if s == nil || vpnPacket.SessionID == 0 || vpnPacket.StreamID == 0 {
+		return false
+	}
+	if vpnPacket.TotalFragments > 1 {
+		return false
+	}
+
+	record, ok := s.sessions.Get(vpnPacket.SessionID)
+	if !ok || record == nil {
+		return false
+	}
+
+	stream, exists := record.getStream(vpnPacket.StreamID)
+	if !exists || stream == nil || stream.ARQ == nil {
+		return false
+	}
+
+	target, err := SocksProto.ParseTargetPayload(vpnPacket.Payload)
+	if err != nil {
+		return false
+	}
+	if err := validateSOCKSTargetHost(target.Host); err != nil {
+		packetType := s.mapSOCKSConnectError(err)
+		stream.ARQ.SendControlPacketWithTTL(
+			packetType,
+			vpnPacket.SequenceNum,
+			0,
+			0,
+			nil,
+			Enums.DefaultPacketPriority(packetType),
+			true,
+			nil,
+			s.cfg.StreamFailurePacketTTL(),
+		)
+		s.cleanupStreamArtifacts(vpnPacket.SessionID, vpnPacket.StreamID)
+		return true
+	}
+
+	return false
+}
+
 func (s *Server) handleStreamSynRequest(vpnPacket VpnProto.Packet, sessionRecord *sessionRuntimeView) bool {
 	if !vpnPacket.HasStreamID || vpnPacket.StreamID == 0 || sessionRecord == nil {
 		return false
 	}
 
-	run := func() {
-		s.processDeferredStreamSyn(vpnPacket)
+	if s.tryHandleImmediateConnectedStreamSyn(vpnPacket) {
+		record, ok := s.sessions.Get(vpnPacket.SessionID)
+		if !ok || record == nil {
+			return true
+		}
+		_ = s.queueImmediateControlAck(record, vpnPacket)
+		return true
+	}
+
+	run := func(ctx context.Context) {
+		s.processDeferredStreamSyn(ctx, vpnPacket)
 	}
 
 	result := s.dispatchDeferredSessionPacketTracked(vpnPacket, "stream-syn", run)
@@ -567,8 +744,25 @@ func (s *Server) handleSOCKS5SynRequest(vpnPacket VpnProto.Packet, sessionRecord
 		return false
 	}
 
-	run := func() {
-		s.processDeferredSOCKS5Syn(vpnPacket)
+	if s.tryHandleImmediateConnectedSOCKS5Syn(vpnPacket) {
+		record, ok := s.sessions.Get(vpnPacket.SessionID)
+		if !ok || record == nil {
+			return true
+		}
+		_ = s.queueImmediateControlAck(record, vpnPacket)
+		return true
+	}
+	if s.tryHandleImmediateRejectedSOCKS5Syn(vpnPacket) {
+		record, ok := s.sessions.Get(vpnPacket.SessionID)
+		if !ok || record == nil {
+			return true
+		}
+		_ = s.queueImmediateControlAck(record, vpnPacket)
+		return true
+	}
+
+	run := func(ctx context.Context) {
+		s.processDeferredSOCKS5Syn(ctx, vpnPacket)
 	}
 
 	result := s.dispatchDeferredSessionPacketTracked(vpnPacket, "socks5-syn", run)
