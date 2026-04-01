@@ -36,8 +36,8 @@ Like every DNS-based tunnel, MasterDnsVPN is sensitive to these conditions, so r
 | Duplication system | ❌ | ❌ | Yes — increases traffic to improve reliability (configurable) |
 | MTU tolerance | Better than DNSTT | - | Works even with very small MTU because protocol overhead is very low |
 | Failover system | ❌ | ❌ | ✅ |
-| Download speed 10MB (Local) | 🔴 2.492s | 🟡 0.978s | 🟢 0.278s |
-| Upload speed 10MB (Local) | 🔴 16.207s | 🟡 3.249s | 🟢 2.205s |
+| Download speed 10MB (Local) | 🟡 0.978s | 🔴 2.492s | 🟢 0.278s |
+| Upload speed 10MB (Local) | 🟡 3.249s | 🔴 16.207s | 🟢 2.205s |
 | Resolver health checks and auto-disable | ❌ | ❌ | ✅ |
 | Background reactivation of healthy resolvers | ❌ | ❌ | ✅ |
 | Local DNS service on client (to reduce DNS hijacking) | ❌ | ❌ | ✅ (with strong DNS caching) |
