@@ -216,6 +216,22 @@ dispatchLoop:
 
 		conns := c.selectTargetConnections(peekedItem.PacketType, selectedStreamID)
 		if len(conns) == 0 {
+			// No valid connections available for this packet. Don't block the
+			// dispatcher — doing so would stall ALL streams until a resolver
+			// comes back. Instead, pop and discard non-retriable control packets
+			// so the queue doesn't jam, and leave data/resend packets for ARQ
+			// retransmission. Signal txSignal to keep the dispatcher alive.
+			if peekedItem.PacketType != Enums.PACKET_STREAM_DATA && peekedItem.PacketType != Enums.PACKET_STREAM_RESEND {
+				if selected != nil {
+					if dropped, _, ok := selected.PopNextTXPacket(); ok && dropped != nil {
+						selected.ReleaseTXPacket(dropped)
+					}
+				} else if selectedID == -1 {
+					c.orphanQueue.Pop(func(p VpnProto.Packet) uint64 {
+						return Enums.PacketTypeStreamKey(p.StreamID, p.PacketType)
+					})
+				}
+			}
 			if !waitForWork() {
 				return
 			}

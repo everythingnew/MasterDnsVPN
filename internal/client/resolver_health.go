@@ -27,10 +27,11 @@ type resolverRecheckState struct {
 }
 
 type resolverDisabledState struct {
-	DisabledAt  time.Time
-	NextRetryAt time.Time
-	RetryCount  int
-	Cause       string
+	DisabledAt   time.Time
+	NextRetryAt  time.Time
+	RetryCount   int
+	SuccessCount int
+	Cause        string
 }
 
 type resolverRecheckCandidate struct {
@@ -47,6 +48,8 @@ type resolverAutoDisableCandidate struct {
 	oldestAge      time.Duration
 	timeoutOnlyAge time.Duration
 }
+
+const runtimeDisabledResolverReactivationSuccessThreshold = 2
 
 func (c *Client) resolverHealthDebugEnabled() bool {
 	return c != nil && c.log != nil && c.log.Enabled(logger.LevelDebug)
@@ -361,10 +364,11 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 	c.resolverHealthMu.Lock()
 	meta := c.resolverRecheck[serverKey]
 	c.runtimeDisabled[serverKey] = resolverDisabledState{
-		DisabledAt:  now,
-		NextRetryAt: nextAt,
-		RetryCount:  meta.FailCount,
-		Cause:       cause,
+		DisabledAt:   now,
+		NextRetryAt:  nextAt,
+		RetryCount:   meta.FailCount,
+		SuccessCount: 0,
+		Cause:        cause,
 	}
 	c.resolverHealthMu.Unlock()
 
@@ -383,10 +387,11 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 	meta.NextAt = nextAt
 	c.resolverRecheck[serverKey] = meta
 	c.runtimeDisabled[serverKey] = resolverDisabledState{
-		DisabledAt:  now,
-		NextRetryAt: nextAt,
-		RetryCount:  meta.FailCount,
-		Cause:       cause,
+		DisabledAt:   now,
+		NextRetryAt:  nextAt,
+		RetryCount:   meta.FailCount,
+		SuccessCount: 0,
+		Cause:        cause,
 	}
 	delete(c.resolverHealth, serverKey)
 	c.resolverHealthMu.Unlock()
@@ -423,6 +428,10 @@ func (c *Client) clearPreferredResolverReferences(serverKey string) {
 		if stream.PreferredServerKey == serverKey {
 			stream.PreferredServerKey = ""
 			stream.ResolverResendStreak = 0
+			stream.CachedResolverPlan = nil
+			stream.CachedResolverPlanFor = ""
+			stream.CachedResolverPlanSize = 0
+			stream.CachedResolverVersion = 0
 		}
 		stream.resolverMu.Unlock()
 	}
@@ -513,6 +522,7 @@ func (c *Client) scheduleResolverRecheckFailure(serverKey string, runtimePriorit
 	if state, ok := c.runtimeDisabled[serverKey]; ok {
 		state.NextRetryAt = meta.NextAt
 		state.RetryCount = meta.FailCount
+		state.SuccessCount = 0
 		c.runtimeDisabled[serverKey] = state
 	}
 }
@@ -576,14 +586,46 @@ func (c *Client) runResolverRecheckBatch(ctx context.Context, now time.Time) {
 			}()
 
 			if c.recheckResolverConnection(ctx, &cn) {
-				if !c.reactivateResolverConnection(cand.key) {
-					c.clearResolverRecheckInFlight(cand.key)
-				}
+				c.handleSuccessfulResolverRecheck(cand.key, c.now())
 				return
 			}
 
 			c.scheduleResolverRecheckFailure(cand.key, cand.runtimePriority, c.now())
 		}(candidate, conn)
+	}
+}
+
+func (c *Client) handleSuccessfulResolverRecheck(serverKey string, now time.Time) {
+	if c == nil || serverKey == "" {
+		return
+	}
+
+	c.resolverHealthMu.Lock()
+	state, runtimeDisabled := c.runtimeDisabled[serverKey]
+	if runtimeDisabled {
+		state.SuccessCount++
+		if state.SuccessCount < runtimeDisabledResolverReactivationSuccessThreshold {
+			nextAt := now.Add(maxDuration(2*time.Second, c.recheckServerInterval()))
+			meta := c.resolverRecheck[serverKey]
+			meta.InFlight = false
+			meta.NextAt = nextAt
+			c.resolverRecheck[serverKey] = meta
+			state.NextRetryAt = nextAt
+			state.RetryCount = meta.FailCount
+			c.runtimeDisabled[serverKey] = state
+			c.resolverHealthMu.Unlock()
+			return
+		}
+	}
+	c.resolverHealthMu.Unlock()
+
+	if !c.applyRecheckedResolverMTU(serverKey) {
+		c.clearResolverRecheckInFlight(serverKey)
+		return
+	}
+
+	if !c.reactivateResolverConnection(serverKey) {
+		c.clearResolverRecheckInFlight(serverKey)
 	}
 }
 
@@ -694,7 +736,7 @@ func (c *Client) recheckResolverConnection(ctx context.Context, conn *Connection
 		if !c.recheckConnectionFn(conn) {
 			return false
 		}
-		return c.applyRecheckedResolverMTU(conn.Key)
+		return true
 	}
 
 	transport, err := newUDPQueryTransport(conn.ResolverLabel)
@@ -733,7 +775,7 @@ func (c *Client) recheckResolverConnection(ctx context.Context, conn *Connection
 		return false
 	}
 
-	return c.applyRecheckedResolverMTU(conn.Key)
+	return true
 }
 
 func (c *Client) applyRecheckedResolverMTU(serverKey string) bool {

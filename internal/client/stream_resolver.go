@@ -118,7 +118,19 @@ func (c *Client) selectUniqueRuntimeConnections(requiredCount int) ([]Connection
 		return nil, ErrNoValidConnections
 	}
 
-	return connections, nil
+	// Filter out runtime-disabled resolvers so control packets
+	// (SYN, CLOSE, RST, ACK, etc.) are not sent to known-bad resolvers.
+	filtered := connections[:0]
+	for _, conn := range connections {
+		if !c.isRuntimeDisabledResolver(conn.Key) {
+			filtered = append(filtered, conn)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, ErrNoValidConnections
+	}
+
+	return filtered, nil
 }
 
 func (c *Client) selectStreamPreferredConnectionForResend(stream *Stream_client) (Connection, bool) {
