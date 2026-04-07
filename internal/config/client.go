@@ -546,6 +546,53 @@ func (c ClientConfig) SessionInitBusyRetryInterval() time.Duration {
 	return time.Duration(c.SessionInitBusyRetryIntervalSeconds * float64(time.Second))
 }
 
+func (c ClientConfig) EffectiveResolverUDPConnectionPoolSize() int {
+	maxDup := max(c.PacketDuplicationCount, c.SetupPacketDuplicationCount)
+	if maxDup < 1 {
+		maxDup = 1
+	}
+	resolverCount := len(c.Resolvers)
+	if resolverCount < 1 {
+		resolverCount = 1
+	}
+
+	size := max(8, c.RX_TX_Workers*maxDup*2)
+	switch {
+	case resolverCount <= 4:
+		size *= 2
+	case resolverCount <= 8:
+		size = size * 3 / 2
+	case resolverCount >= 64:
+		size = max(8, size/2)
+	case resolverCount >= 32:
+		size = max(8, size*3/4)
+	}
+
+	return clampInt(size, 8, 128)
+}
+
+func (c ClientConfig) EffectiveStreamQueueInitialCapacity() int {
+	size := max(c.ARQWindowSize/8, c.MaxPacketsPerBatch*8)
+	if c.PacketDuplicationCount > 1 {
+		size += c.PacketDuplicationCount * 4
+	}
+	return clampInt(size, 32, 512)
+}
+
+func (c ClientConfig) EffectiveOrphanQueueInitialCapacity() int {
+	maxDup := max(c.PacketDuplicationCount, c.SetupPacketDuplicationCount)
+	size := c.MaxPacketsPerBatch*4 + c.RX_TX_Workers*2 + maxDup*4
+	return clampInt(size, 16, 128)
+}
+
+func (c ClientConfig) EffectiveDNSResponseFragmentStoreCap() int {
+	size := (c.TunnelProcessWorkers + c.RX_TX_Workers) * c.MaxPacketsPerBatch * 2
+	if c.PacketDuplicationCount > 1 {
+		size += c.PacketDuplicationCount * c.MaxPacketsPerBatch * 4
+	}
+	return clampInt(size, 128, 2048)
+}
+
 func applyClientConfigOverrideValues(cfg *ClientConfig, values map[string]any) error {
 	if cfg == nil || len(values) == 0 {
 		return nil

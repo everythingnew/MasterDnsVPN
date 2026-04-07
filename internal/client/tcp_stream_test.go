@@ -21,8 +21,6 @@ import (
 func buildTCPTestClient() *Client {
 	return buildTestClientWithResolvers(config.ClientConfig{
 		ProtocolType:                "TCP",
-		StreamQueueInitialCapacity:  32,
-		OrphanQueueInitialCapacity:  8,
 		ARQWindowSize:               64,
 		ARQInitialRTOSeconds:        0.2,
 		ARQMaxRTOSeconds:            1.0,

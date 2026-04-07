@@ -494,10 +494,6 @@ sudo journalctl -u masterdnsvpn-client -f
 | `TUNNEL_PACKET_TIMEOUT_SECONDS` | `10.0` | clamp به `0.5..120` ثانیه | timeout کلی یک packet در runtime async کلاینت است.<br>اگر packet تا این مدت outcome نگیرد، runtime آن را timeout حساب می‌کند. |
 | `DISPATCHER_IDLE_POLL_INTERVAL_SECONDS` | `0.020` | clamp به `0.001..1.0` ثانیه | وقتی dispatcher کار خاصی ندارد، هر چند وقت یک‌بار دوباره queueها را چک کند.<br>عدد کوچک‌تر latency را کم می‌کند ولی CPU idle را بالا می‌برد. |
 | `RX_CHANNEL_SIZE` | `2048` | clamp به `64..65536` | همان مفهوم برای مسیر دریافت. |
-| `RESOLVER_UDP_CONNECTION_POOL_SIZE` | `128` | clamp به `1..1024` | برای هر resolver چند UDP connection قابل reuse نگه داشته شود.<br>عدد بزرگ‌تر هزینه ساخت connection را کم می‌کند ولی منابع بیشتری می‌گیرد. |
-| `STREAM_QUEUE_INITIAL_CAPACITY` | `256` | clamp به `8..65536` | ظرفیت اولیه queue هر stream برای packetهای منتظر ارسال/مدیریت است.<br>برای streamهای زیاد، عدد مناسب باعث realloc کمتر می‌شود. |
-| `ORPHAN_QUEUE_INITIAL_CAPACITY` | `64` | clamp به `4..4096` | ظرفیت اولیه queue packetهای orphan است؛ یعنی packetهایی که فعلاً هنوز stream مقصدشان attach نشده یا باید موقتاً جدا نگه داشته شوند. |
-| `DNS_RESPONSE_FRAGMENT_STORE_CAPACITY` | `512` | clamp به `16..16384` | ظرفیت نگهداری fragmentهای پاسخ DNS پیش از مونتاژ کامل. |
 | `SOCKS_UDP_ASSOCIATE_READ_TIMEOUT_SECONDS` | `30.0` | clamp به `1..3600` ثانیه | timeout خواندن برای UDP ASSOCIATE در حالت SOCKS است.<br>اگر طولانی‌تر باشد sessionهای بی‌استفاده دیرتر جمع می‌شوند. |
 | `CLIENT_TERMINAL_STREAM_RETENTION_SECONDS` | `45.0` | clamp به `1..3600` ثانیه | streamهایی که به حالت terminal رسیده‌اند، چه مدت در memory نگه داشته شوند تا ACKهای دیررس/closeهای عقب‌افتاده هنوز درست هندل شوند. |
 | `CLIENT_CANCELLED_SETUP_RETENTION_SECONDS` | `120.0` | clamp به `1..3600` ثانیه | اگر setup یک stream لغو شود، state آن تا چه مدت نگه داشته شود تا duplicate/late packetها دوباره آن را زنده نکنند. |

@@ -121,7 +121,7 @@ func (c *Client) new_stream(streamID uint16, conn net.Conn, targetPayload []byte
 		InitialPayload:     targetPayload,
 		PriorityCounts:     make(map[int]int),
 
-		txQueue: mlq.New[*clientStreamTXPacket](c.cfg.StreamQueueInitialCapacity),
+		txQueue: mlq.New[*clientStreamTXPacket](c.cfg.EffectiveStreamQueueInitialCapacity()),
 
 		HandshakeLastProgress: now,
 	}
@@ -570,7 +570,7 @@ func (c *Client) InitVirtualStream0() {
 	s := &Stream_client{
 		client:     c,
 		StreamID:   streamID,
-		txQueue:    mlq.New[*clientStreamTXPacket](c.cfg.StreamQueueInitialCapacity),
+		txQueue:    mlq.New[*clientStreamTXPacket](c.cfg.EffectiveStreamQueueInitialCapacity()),
 		CreateTime: time.Now(),
 	}
 

@@ -506,10 +506,6 @@ These settings are critical on the server:
 | `TUNNEL_PACKET_TIMEOUT_SECONDS` | `8.0` | if invalid, fallback applies | Overall timeout for tunnel packet handling. |
 | `DISPATCHER_IDLE_POLL_INTERVAL_SECONDS` | `0.020` | if invalid, fallback applies | When there is nothing to send, the dispatcher sleeps for this interval before polling again. |
 | `RX_CHANNEL_SIZE` | `4096` | if invalid, fallback applies | Capacity of the incoming tunnel packet channel. |
-| `RESOLVER_UDP_CONNECTION_POOL_SIZE` | `64` | if invalid, fallback applies | Number of reusable UDP sockets kept per resolver label. |
-| `STREAM_QUEUE_INITIAL_CAPACITY` | `128` | if invalid, fallback applies | Initial queue capacity for per-stream client transmit queues. |
-| `ORPHAN_QUEUE_INITIAL_CAPACITY` | `32` | if invalid, fallback applies | Initial capacity for the orphan control queue. |
-| `DNS_RESPONSE_FRAGMENT_STORE_CAPACITY` | `256` | if invalid, fallback applies | Capacity of the client-side DNS response fragment store. |
 | `SOCKS_UDP_ASSOCIATE_READ_TIMEOUT_SECONDS` | `30.0` | if invalid, fallback applies | Read timeout for SOCKS UDP associate mode. |
 | `CLIENT_TERMINAL_STREAM_RETENTION_SECONDS` | `45.0` | if invalid, fallback applies | How long terminal streams remain in client bookkeeping before full cleanup. |
 | `CLIENT_CANCELLED_SETUP_RETENTION_SECONDS` | `120.0` | if invalid, fallback applies | Retention time for setup streams cancelled before completion. |

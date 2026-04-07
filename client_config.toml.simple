@@ -233,15 +233,6 @@ DISPATCHER_IDLE_POLL_INTERVAL_SECONDS = 0.020
 RX_CHANNEL_SIZE = 16384
 
 # UDP connection pool size per resolver key.
-# Clamped to [1, 1024].
-RESOLVER_UDP_CONNECTION_POOL_SIZE = 128
-
-# Initial queue/store capacities.
-# These reduce reallocations under many active streams.
-STREAM_QUEUE_INITIAL_CAPACITY = 256
-ORPHAN_QUEUE_INITIAL_CAPACITY = 64
-DNS_RESPONSE_FRAGMENT_STORE_CAPACITY = 512
-
 # Local UDP ASSOCIATE read timeout.
 # Clamped to [1s, 3600s].
 SOCKS_UDP_ASSOCIATE_READ_TIMEOUT_SECONDS = 30.0

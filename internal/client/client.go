@@ -259,11 +259,11 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 			time.Duration(cfg.LocalDNSCacheTTLSeconds)*time.Second,
 			time.Duration(cfg.LocalDNSPendingTimeoutSec)*time.Second,
 		),
-		dnsResponses:           fragmentStore.New[dnsFragmentKey](cfg.DNSResponseFragmentStoreCap),
+		dnsResponses:           fragmentStore.New[dnsFragmentKey](cfg.EffectiveDNSResponseFragmentStoreCap()),
 		localDNSCachePersist:   cfg.LocalDNSCachePersist,
 		localDNSCachePath:      cfg.LocalDNSCachePath(),
 		localDNSCacheFlushTick: time.Duration(cfg.LocalDNSCacheFlushSec) * time.Second,
-		orphanQueue:            mlq.New[VpnProto.Packet](cfg.OrphanQueueInitialCapacity),
+		orphanQueue:            mlq.New[VpnProto.Packet](cfg.EffectiveOrphanQueueInitialCapacity()),
 		sessionResetSignal:     make(chan struct{}, 1),
 		socksRateLimit:         newSocksRateLimiter(),
 	}
