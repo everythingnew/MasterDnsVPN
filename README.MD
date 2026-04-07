@@ -589,10 +589,10 @@ These settings are critical on the server:
 | :--- | :--- | :--- | :--- |
 | `DEFERRED_SESSION_WORKERS` | `2` | clamped up to `128` | Number of deferred-session workers.<br>These workers handle ordering-sensitive and setup-heavy tasks such as stream setup, SOCKS connect, and some DNS assembly tasks.<br>Too few can slow down stream setup; too many can create unnecessary contention. |
 | `DEFERRED_SESSION_QUEUE_LIMIT` | `2048` | clamped to `256..14336` | Queue capacity for deferred-session work.<br>If it fills up, new setup or deferred tasks may be rejected. |
-| `SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY` | `128` | clamped to `4..4096` | Initial capacity of the per-session orphan control queue. |
-| `STREAM_QUEUE_INITIAL_CAPACITY` | `256` | clamped to `8..65536` | Initial capacity of each stream queue on the server. |
-| `DNS_FRAGMENT_STORE_CAPACITY` | `512` | clamped to `16..16384` | Capacity used to hold DNS tunnel fragments while waiting for full assembly. |
-| `SOCKS5_FRAGMENT_STORE_CAPACITY` | `1024` | clamped to `16..16384` | Capacity used to hold fragmented SOCKS5 setup payloads. |
+| `SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY` | auto | derived internally | Initial orphan/control queue sizing is derived automatically from server worker counts and batching pressure. |
+| `STREAM_QUEUE_INITIAL_CAPACITY` | auto | derived internally | Per-stream queue initial capacity is derived automatically from ARQ window size and packing pressure. |
+| `DNS_FRAGMENT_STORE_CAPACITY` | auto | derived internally | DNS tunnel fragment store capacity is derived automatically from request concurrency and worker count. |
+| `SOCKS5_FRAGMENT_STORE_CAPACITY` | auto | derived internally | SOCKS5 setup fragment store capacity is derived automatically from deferred-session pressure and concurrency. |
 
 ### 3.5.4) 🍪 Session / Stream Lifecycle and Invalid Cookie Tracking
 

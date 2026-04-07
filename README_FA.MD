@@ -577,10 +577,10 @@ sudo journalctl -u masterdnsvpn-client -f
 | :--- | :--- | :--- | :--- |
 | `DEFERRED_SESSION_WORKERS` | `2` | clamp تا حداکثر `128` | تعداد workerهای deferred session است.<br>این workerها کارهای ordering-sensitive و setup-heavy را برای sessionها انجام می‌دهند.<br>کم بودن بیش از حد آن می‌تواند setup streamها را کند کند؛ زیاد بودن بی‌مورد هم contention می‌سازد. |
 | `DEFERRED_SESSION_QUEUE_LIMIT` | `2048` | clamp به `256..14336` | ظرفیت queue deferred session برای کارهای معوق است.<br>اگر queue پر شود، setup یا کارهای deferred جدید ممکن است reject شوند. |
-| `SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY` | `128` | clamp به `4..4096` | ظرفیت اولیه queue packetهای orphan در هر session. |
-| `STREAM_QUEUE_INITIAL_CAPACITY` | `256` | clamp به `8..65536` | ظرفیت اولیه queue هر stream در سمت سرور. |
-| `DNS_FRAGMENT_STORE_CAPACITY` | `512` | clamp به `16..16384` | ظرفیت نگهداری fragmentهای DNS query داخل تونل. |
-| `SOCKS5_FRAGMENT_STORE_CAPACITY` | `1024` | clamp به `16..16384` | ظرفیت نگهداری fragmentهای setup مربوط به SOCKS5. |
+| `SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY` | auto | مشتق‌شده داخلی | ظرفیت اولیه queueهای orphan/control حالا از روی تعداد workerها و فشار batching به‌صورت خودکار تعیین می‌شود. |
+| `STREAM_QUEUE_INITIAL_CAPACITY` | auto | مشتق‌شده داخلی | ظرفیت اولیه queue هر stream از روی اندازه window و فشار packing به‌صورت خودکار تعیین می‌شود. |
+| `DNS_FRAGMENT_STORE_CAPACITY` | auto | مشتق‌شده داخلی | ظرفیت نگهداری fragmentهای DNS query از روی concurrency و worker count به‌صورت خودکار تعیین می‌شود. |
+| `SOCKS5_FRAGMENT_STORE_CAPACITY` | auto | مشتق‌شده داخلی | ظرفیت نگهداری fragmentهای setup مربوط به SOCKS5 از روی فشار deferred-session و concurrency به‌صورت خودکار تعیین می‌شود. |
 
 ### ۳.۵.۴) بخش 🍪 چرخه عمر session/stream و invalid-cookie
 

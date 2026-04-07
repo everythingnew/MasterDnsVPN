@@ -83,11 +83,8 @@ DEFERRED_SESSION_WORKERS = 5
 # setup traffic is less likely to be dropped during short spikes.
 DEFERRED_SESSION_QUEUE_LIMIT = 4096
 
-# Initial queue / store capacities.
-SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY = 128
-STREAM_QUEUE_INITIAL_CAPACITY = 256
-DNS_FRAGMENT_STORE_CAPACITY = 512
-SOCKS5_FRAGMENT_STORE_CAPACITY = 1024
+# Initial queue / store capacities are now derived automatically by the server
+# from workers, ARQ window, and batching pressure.
 
 # ------------------------------------------------------------------------------
 # 4) Session Lifecycle & Invalid-Cookie Handling

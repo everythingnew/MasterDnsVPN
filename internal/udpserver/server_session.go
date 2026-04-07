@@ -694,7 +694,7 @@ func (s *Server) handleSessionInitRequest(questionPacket []byte, decision domain
 		vpnPacket.Payload,
 		resolvedUpload,
 		resolvedDownload,
-		s.cfg.MaxPacketsPerBatch,
+		s.cfg.EffectiveMaxPacketsPerBatch(),
 	)
 	if err != nil {
 		if err == ErrSessionTableFull {
