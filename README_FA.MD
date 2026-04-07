@@ -476,7 +476,7 @@ sudo journalctl -u masterdnsvpn-client -f
 | `MAX_DOWNLOAD_MTU` | `500` | نباید از `MIN_DOWNLOAD_MTU` کوچک‌تر باشد | سقف جست‌وجوی MTU برای download.<br>اگر می‌دانید شبکه شما محدود است، کوچک‌تر کردن این مقدار startup را سریع‌تر می‌کند. |
 | `MTU_TEST_RETRIES` | `2` | اگر کمتر از `1` باشد، fallback اعمال می‌شود | هر probe MTU چند بار retry شود.<br>روی resolverهای پر loss عدد بالاتر می‌تواند مفید باشد، ولی startup را کندتر می‌کند. |
 | `MTU_TEST_TIMEOUT` | `2.0` | اگر `<=0` باشد، fallback اعمال می‌شود | timeout هر probe در تست MTU است.<br>اگر شبکه شما دیرپاسخ است، این مقدار خیلی کم باعث حذف resolverهای سالم می‌شود. |
-| `MTU_TEST_PARALLELISM` | `32` | اگر کمتر از `1` باشد، fallback اعمال می‌شود | چند تست MTU هم‌زمان انجام شوند.<br>عدد بالا startup را سریع‌تر می‌کند ولی CPU و ترافیک بیشتری می‌سازد. |
+| `MTU_TEST_PARALLELISM` | `16` | اگر کمتر از `1` باشد، fallback اعمال می‌شود | چند تست MTU هم‌زمان انجام شوند.<br>عدد بالا startup را سریع‌تر می‌کند ولی CPU و ترافیک بیشتری می‌سازد. |
 | `SAVE_MTU_SERVERS_TO_FILE` | `false` | `true/false` | اگر `true` باشد، resolverهای موفق همراه با MTU نهایی‌شان در فایل ثبت می‌شوند.<br>برای تحلیل و ساختن پروفایل resolverها مفید است. |
 | `MTU_SERVERS_FILE_NAME` | `"masterdnsvpn_success_test_{time}.log"` | رشته | نام فایل خروجی لاگ تست MTU.<br>معمولاً placeholderهایی مثل `{time}` داخلش استفاده می‌شود تا هر run فایل جدا داشته باشد. |
 | `MTU_SERVERS_FILE_FORMAT` | `"{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}"` | رشته | فرمت هر خط برای resolverهای موفق است.<br>فقط روی متن خروجی اثر دارد و رفتار شبکه را عوض نمی‌کند. |
@@ -488,11 +488,11 @@ sudo journalctl -u masterdnsvpn-client -f
 
 | پارامتر | مقدار نمونه | مقادیر مجاز / رفتار واقعی | توضیح کامل |
 | :--- | :--- | :--- | :--- |
-| `RX_TX_WORKERS` | `2` | clamp به `1..64` | تعداد workerهای مشترک runtime برای هر دو مسیر خواندن پاسخ‌های DNS و نوشتن queryهای خروجی.<br>این مقدار به صورت یکسان برای RX و TX استفاده می‌شود تا تنظیمات ساده‌تر بماند. |
-| `TUNNEL_PROCESS_WORKERS` | `2` | clamp به `1..64` | تعداد workerهایی که packetهای دریافتی را decode و process می‌کنند.<br>اگر resolverهای زیادی دارید، این بخش روی CPU اثر زیادی دارد. |
+| `RX_TX_WORKERS` | `4` | clamp به `1..64` | تعداد workerهای مشترک runtime برای هر دو مسیر خواندن پاسخ‌های DNS و نوشتن queryهای خروجی.<br>این مقدار به صورت یکسان برای RX و TX استفاده می‌شود تا تنظیمات ساده‌تر بماند. |
+| `TUNNEL_PROCESS_WORKERS` | `6` | clamp به `1..64` | تعداد workerهایی که packetهای دریافتی را decode و process می‌کنند.<br>اگر resolverهای زیادی دارید، این بخش روی CPU اثر زیادی دارد. |
 | `TUNNEL_PACKET_TIMEOUT_SECONDS` | `10.0` | clamp به `0.5..120` ثانیه | timeout کلی یک packet در runtime async کلاینت است.<br>اگر packet تا این مدت outcome نگیرد، runtime آن را timeout حساب می‌کند. |
 | `DISPATCHER_IDLE_POLL_INTERVAL_SECONDS` | `0.020` | clamp به `0.001..1.0` ثانیه | وقتی dispatcher کار خاصی ندارد، هر چند وقت یک‌بار دوباره queueها را چک کند.<br>عدد کوچک‌تر latency را کم می‌کند ولی CPU idle را بالا می‌برد. |
-| `RX_CHANNEL_SIZE` | `2048` | clamp به `64..65536` | همان مفهوم برای مسیر دریافت. |
+| `RX_CHANNEL_SIZE` | `4096` | clamp به `64..65536` | همان مفهوم برای مسیر دریافت. |
 | `SOCKS_UDP_ASSOCIATE_READ_TIMEOUT_SECONDS` | `30.0` | clamp به `1..3600` ثانیه | timeout خواندن برای UDP ASSOCIATE در حالت SOCKS است.<br>اگر طولانی‌تر باشد sessionهای بی‌استفاده دیرتر جمع می‌شوند. |
 | `CLIENT_TERMINAL_STREAM_RETENTION_SECONDS` | `45.0` | clamp به `1..3600` ثانیه | streamهایی که به حالت terminal رسیده‌اند، چه مدت در memory نگه داشته شوند تا ACKهای دیررس/closeهای عقب‌افتاده هنوز درست هندل شوند. |
 | `CLIENT_CANCELLED_SETUP_RETENTION_SECONDS` | `120.0` | clamp به `1..3600` ثانیه | اگر setup یک stream لغو شود، state آن تا چه مدت نگه داشته شود تا duplicate/late packetها دوباره آن را زنده نکنند. |
@@ -518,7 +518,7 @@ sudo journalctl -u masterdnsvpn-client -f
 
 | پارامتر | مقدار نمونه | مقادیر مجاز / رفتار واقعی | توضیح کامل |
 | :--- | :--- | :--- | :--- |
-| `MAX_PACKETS_PER_BATCH` | `5` | clamp به `1..64` | حداکثر تعداد control blockهایی که کلاینت در یک batch کنار هم می‌گذارد.<br>برای کاهش سربار ACK و control مفید است. |
+| `MAX_PACKETS_PER_BATCH` | `8` | clamp به `1..64` | حداکثر تعداد control blockهایی که کلاینت در یک batch کنار هم می‌گذارد.<br>برای کاهش سربار ACK و control مفید است. |
 | `ARQ_WINDOW_SIZE` | `600` | clamp به `1..16384` | اندازه پنجره ARQ است.<br>پنجره بزرگ‌تر throughput را بهتر می‌کند، ولی state و memory بیشتری مصرف می‌کند. |
 | `ARQ_INITIAL_RTO_SECONDS` | `1` | clamp به `0.05..60` ثانیه | RTO اولیه برای packetهای data.<br>اگر خیلی کم باشد resendهای بی‌مورد زیاد می‌شود. |
 | `ARQ_MAX_RTO_SECONDS` | `5.0` | clamp به `[ARQ_INITIAL_RTO_SECONDS, 120]` | سقف RTO برای data. |
@@ -563,9 +563,9 @@ sudo journalctl -u masterdnsvpn-client -f
 | :--- | :--- | :--- | :--- |
 | `UDP_HOST` | `"0.0.0.0"` | اگر خالی باشد همین مقدار استفاده می‌شود | آدرسی که سرور DNS روی آن bind می‌شود.<br>`0.0.0.0` یعنی روی همه interfaceها گوش بدهد. |
 | `UDP_PORT` | `53` | `1..65535` | پورت UDP سرور است.<br>به‌طور معمول باید همان `53` باشد تا resolverها بتوانند مستقیماً به آن query بفرستند. |
-| `UDP_READERS` | `2` | اگر `<=0` باشد auto-default | تعداد goroutineهای خواندن مستقیم از socket UDP.<br>عدد بالاتر در سرورهای پر ترافیک مفید است، ولی از یک حد به بعد فقط context switching را زیاد می‌کند. |
-| `DNS_REQUEST_WORKERS` | `4` | اگر `<=0` باشد auto-default | تعداد workerهایی که requestهای ورودی را از front-door queue برمی‌دارند و به لایه session/decode می‌دهند. |
-| `MAX_CONCURRENT_REQUESTS` | `4096` | اگر `<=0` باشد fallback | ظرفیت صف requestهای ورودی است.<br>اگر این صف پر شود، پکت‌ها drop می‌شوند و سرور rate-limited overload log می‌دهد. |
+| `UDP_READERS` | `4` | اگر `<=0` باشد auto-default | تعداد goroutineهای خواندن مستقیم از socket UDP.<br>عدد بالاتر در سرورهای پر ترافیک مفید است، ولی از یک حد به بعد فقط context switching را زیاد می‌کند. |
+| `DNS_REQUEST_WORKERS` | `8` | اگر `<=0` باشد auto-default | تعداد workerهایی که requestهای ورودی را از front-door queue برمی‌دارند و به لایه session/decode می‌دهند. |
+| `MAX_CONCURRENT_REQUESTS` | `16384` | اگر `<=0` باشد fallback | ظرفیت صف requestهای ورودی است.<br>اگر این صف پر شود، پکت‌ها drop می‌شوند و سرور rate-limited overload log می‌دهد. |
 | `SOCKET_BUFFER_SIZE` | `4194304` | اگر `<=0` باشد fallback | اندازه بافر socket UDP در سطح سیستم‌عامل است.<br>برای burstهای ورودی زیاد مهم است. |
 | `MAX_PACKET_SIZE` | `65535` | اگر `<=0` باشد fallback | اندازه بزرگ‌ترین bufferی که packet pool برای هر packet می‌گیرد. |
 | `DROP_LOG_INTERVAL_SECONDS` | `2.0` | اگر `<=0` باشد fallback | حداقل فاصله بین لاگ‌های drop/overload است تا لاگ سرور در زمان فشار spam نشود. |
@@ -574,8 +574,8 @@ sudo journalctl -u masterdnsvpn-client -f
 
 | پارامتر | مقدار نمونه | مقادیر مجاز / رفتار واقعی | توضیح کامل |
 | :--- | :--- | :--- | :--- |
-| `DEFERRED_SESSION_WORKERS` | `2` | clamp تا حداکثر `128` | تعداد workerهای deferred session است.<br>این workerها کارهای ordering-sensitive و setup-heavy را برای sessionها انجام می‌دهند.<br>کم بودن بیش از حد آن می‌تواند setup streamها را کند کند؛ زیاد بودن بی‌مورد هم contention می‌سازد. |
-| `DEFERRED_SESSION_QUEUE_LIMIT` | `2048` | clamp به `256..14336` | ظرفیت queue deferred session برای کارهای معوق است.<br>اگر queue پر شود، setup یا کارهای deferred جدید ممکن است reject شوند. |
+| `DEFERRED_SESSION_WORKERS` | `4` | clamp تا حداکثر `128` | تعداد workerهای deferred session است.<br>این workerها کارهای ordering-sensitive و setup-heavy را برای sessionها انجام می‌دهند.<br>کم بودن بیش از حد آن می‌تواند setup streamها را کند کند؛ زیاد بودن بی‌مورد هم contention می‌سازد. |
+| `DEFERRED_SESSION_QUEUE_LIMIT` | `4096` | clamp به `256..14336` | ظرفیت queue deferred session برای کارهای معوق است.<br>اگر queue پر شود، setup یا کارهای deferred جدید ممکن است reject شوند. |
 | `SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY` | auto | مشتق‌شده داخلی | ظرفیت اولیه queueهای orphan/control حالا از روی تعداد workerها و فشار batching به‌صورت خودکار تعیین می‌شود. |
 | `STREAM_QUEUE_INITIAL_CAPACITY` | auto | مشتق‌شده داخلی | ظرفیت اولیه queue هر stream از روی اندازه window و فشار packing به‌صورت خودکار تعیین می‌شود. |
 | `DNS_FRAGMENT_STORE_CAPACITY` | auto | مشتق‌شده داخلی | ظرفیت نگهداری fragmentهای DNS query از روی concurrency و worker count به‌صورت خودکار تعیین می‌شود. |
@@ -629,7 +629,7 @@ sudo journalctl -u masterdnsvpn-client -f
 
 | پارامتر | مقدار نمونه | مقادیر مجاز / رفتار واقعی | توضیح کامل |
 | :--- | :--- | :--- | :--- |
-| `MAX_PACKETS_PER_BATCH` | `10` | اگر `<1` باشد fallback | حداکثر تعداد control blockهایی که سرور در یک پاسخ packed می‌کند.<br>نکته مهم: اگر مقدار نامعتبر بدهید، fallback واقعی کد `20` است. |
+| `MAX_PACKETS_PER_BATCH` | `8` | اگر `<1` باشد fallback | حداکثر تعداد control blockهایی که سرور در یک پاسخ packed می‌کند.<br>نکته مهم: اگر مقدار نامعتبر بدهید، fallback واقعی کد `20` است. |
 | `PACKET_BLOCK_CONTROL_DUPLICATION` | `1` | clamp به `1..16` | آخرین packed control block چند turn پشت‌سرهم تکرار شود.<br>`1` یعنی عملاً duplication خاموش است.<br>در شبکه lossy برای رسیدن ACK/closeها مفید است. |
 | `STREAM_SETUP_ACK_TTL_SECONDS` | `400.0` | clamp به `1..86400` ثانیه | TTL packetهای ACK مربوط به setup stream. |
 | `STREAM_RESULT_PACKET_TTL_SECONDS` | `300.0` | clamp به `1..86400` ثانیه | TTL packetهای result مثل connect success/failure که باید به کلاینت برسند. |

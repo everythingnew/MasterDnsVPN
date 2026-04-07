@@ -500,8 +500,8 @@ These settings are critical on the server:
 
 | Parameter | Sample Value | Allowed Values / Real Behavior | Full Explanation |
 | :--- | :--- | :--- | :--- |
-| `RX_TX_WORKERS` | `6` | if invalid, fallback applies | Number of shared runtime workers used for both UDP tunnel reads and writes. |
-| `TUNNEL_PROCESS_WORKERS` | `4` | if invalid, fallback applies | Number of workers processing tunnel packets after read. |
+| `RX_TX_WORKERS` | `4` | if invalid, fallback applies | Number of shared runtime workers used for both UDP tunnel reads and writes. |
+| `TUNNEL_PROCESS_WORKERS` | `6` | if invalid, fallback applies | Number of workers processing tunnel packets after read. |
 | `TUNNEL_PACKET_TIMEOUT_SECONDS` | `8.0` | if invalid, fallback applies | Overall timeout for tunnel packet handling. |
 | `DISPATCHER_IDLE_POLL_INTERVAL_SECONDS` | `0.020` | if invalid, fallback applies | When there is nothing to send, the dispatcher sleeps for this interval before polling again. |
 | `RX_CHANNEL_SIZE` | `4096` | if invalid, fallback applies | Capacity of the incoming tunnel packet channel. |
@@ -575,9 +575,9 @@ These settings are critical on the server:
 | :--- | :--- | :--- | :--- |
 | `UDP_HOST` | `"0.0.0.0"` | if empty, this value is used | Address where the DNS server binds.<br>`0.0.0.0` means listen on all interfaces. |
 | `UDP_PORT` | `53` | `1..65535` | UDP port used by the server.<br>In most deployments this should remain `53` so resolvers can query it directly. |
-| `UDP_READERS` | `2` | auto-default if `<=0` | Number of goroutines reading directly from the UDP socket.<br>A larger number may help on very busy servers, but beyond a point it only increases context switching. |
-| `DNS_REQUEST_WORKERS` | `4` | auto-default if `<=0` | Number of workers that take requests from the front-door queue and pass them into the session/decode layer. |
-| `MAX_CONCURRENT_REQUESTS` | `4096` | fallback if `<=0` | Capacity of the incoming request queue.<br>If this queue fills up, packets are dropped and the server emits rate-limited overload logs. |
+| `UDP_READERS` | `4` | auto-default if `<=0` | Number of goroutines reading directly from the UDP socket.<br>A larger number may help on very busy servers, but beyond a point it only increases context switching. |
+| `DNS_REQUEST_WORKERS` | `8` | auto-default if `<=0` | Number of workers that take requests from the front-door queue and pass them into the session/decode layer. |
+| `MAX_CONCURRENT_REQUESTS` | `16384` | fallback if `<=0` | Capacity of the incoming request queue.<br>If this queue fills up, packets are dropped and the server emits rate-limited overload logs. |
 | `SOCKET_BUFFER_SIZE` | `4194304` | fallback if `<=0` | Operating-system socket buffer size request for the UDP listener.<br>This matters for heavy bursts of incoming traffic. |
 | `MAX_PACKET_SIZE` | `65535` | fallback if `<=0` | Size of the largest packet buffer that the packet pool allocates. |
 | `DROP_LOG_INTERVAL_SECONDS` | `2.0` | fallback if `<=0` | Minimum interval between repeated overload/drop logs, to avoid log spam during pressure. |
@@ -586,8 +586,8 @@ These settings are critical on the server:
 
 | Parameter | Sample Value | Allowed Values / Real Behavior | Full Explanation |
 | :--- | :--- | :--- | :--- |
-| `DEFERRED_SESSION_WORKERS` | `2` | clamped up to `128` | Number of deferred-session workers.<br>These workers handle ordering-sensitive and setup-heavy tasks such as stream setup, SOCKS connect, and some DNS assembly tasks.<br>Too few can slow down stream setup; too many can create unnecessary contention. |
-| `DEFERRED_SESSION_QUEUE_LIMIT` | `2048` | clamped to `256..14336` | Queue capacity for deferred-session work.<br>If it fills up, new setup or deferred tasks may be rejected. |
+| `DEFERRED_SESSION_WORKERS` | `4` | clamped up to `128` | Number of deferred-session workers.<br>These workers handle ordering-sensitive and setup-heavy tasks such as stream setup, SOCKS connect, and some DNS assembly tasks.<br>Too few can slow down stream setup; too many can create unnecessary contention. |
+| `DEFERRED_SESSION_QUEUE_LIMIT` | `4096` | clamped to `256..14336` | Queue capacity for deferred-session work.<br>If it fills up, new setup or deferred tasks may be rejected. |
 | `SESSION_ORPHAN_QUEUE_INITIAL_CAPACITY` | auto | derived internally | Initial orphan/control queue sizing is derived automatically from server worker counts and batching pressure. |
 | `STREAM_QUEUE_INITIAL_CAPACITY` | auto | derived internally | Per-stream queue initial capacity is derived automatically from ARQ window size and packing pressure. |
 | `DNS_FRAGMENT_STORE_CAPACITY` | auto | derived internally | DNS tunnel fragment store capacity is derived automatically from request concurrency and worker count. |
@@ -641,7 +641,7 @@ These settings are critical on the server:
 
 | Parameter | Sample Value | Allowed Values / Real Behavior | Full Explanation |
 | :--- | :--- | :--- | :--- |
-| `MAX_PACKETS_PER_BATCH` | `10` | fallback if `<1` | Maximum number of control blocks the server tries to pack into one response.<br>Important note: if the value is invalid, the real code fallback is `20`. |
+| `MAX_PACKETS_PER_BATCH` | `8` | fallback if `<1` | Maximum number of control blocks the server tries to pack into one response.<br>Important note: if the value is invalid, the real code fallback is `20`. |
 | `PACKET_BLOCK_CONTROL_DUPLICATION` | `1` | clamp to `1..16` | How many extra turns the last packed control block should be repeated.<br>`1` effectively means duplication is off.<br>This is useful on lossy links so critical ACK/close data arrives more reliably. |
 | `STREAM_SETUP_ACK_TTL_SECONDS` | `400.0` | clamp to `1..86400` seconds | TTL of ACK packets related to stream setup. |
 | `STREAM_RESULT_PACKET_TTL_SECONDS` | `300.0` | clamp to `1..86400` seconds | TTL of result packets such as connect success/failure that must reach the client. |
