@@ -10,11 +10,13 @@ package client
 import (
 	"net"
 	"sync" // Added for sync.Pool
+	"sync/atomic"
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
 	Enums "masterdnsvpn-go/internal/enums"
 	"masterdnsvpn-go/internal/mlq"
+	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
 
 var txPacketPool = sync.Pool{
@@ -58,6 +60,8 @@ type Stream_client struct {
 	PriorityCounts map[int]int
 
 	HandshakeLastProgress time.Time
+
+	controlCount atomic.Int32
 
 	txQueueMu     sync.Mutex
 	statusMu      sync.RWMutex
@@ -207,6 +211,7 @@ func (s *Stream_client) PushTXPacket(priority int, packetType uint8, sequenceNum
 	p.TTL = ttl
 	p.RetryCount = 0
 	p.Scheduled = false
+	p.isControlCounted.Store(false)
 
 	switch packetType {
 	case Enums.PACKET_STREAM_DATA:
@@ -230,6 +235,12 @@ func (s *Stream_client) PushTXPacket(priority int, packetType uint8, sequenceNum
 		// Duplicate found in census
 		s.ReleaseTXPacket(p)
 		return false
+	}
+
+	if VpnProto.IsPackableControlPacket(packetType, len(payload)) {
+		if p.isControlCounted.CompareAndSwap(false, true) {
+			s.controlCount.Add(1)
+		}
 	}
 
 	if packetType == Enums.PACKET_STREAM_RESEND {
@@ -265,6 +276,11 @@ func (s *Stream_client) NoteTXPacketDequeued(packet *clientStreamTXPacket) {
 	if s == nil || packet == nil {
 		return
 	}
+
+	if packet.isControlCounted.CompareAndSwap(true, false) {
+		s.controlCount.Add(-1)
+	}
+
 	if a, ok := s.Stream.(*arq.ARQ); ok && a != nil {
 		a.NoteTXPacketDequeued(packet.PacketType, packet.SequenceNum, packet.FragmentID)
 	}
@@ -291,6 +307,9 @@ func (s *Stream_client) RemoveQueuedData(sequenceNum uint16) bool {
 			return Enums.PacketIdentityKey(s.StreamID, p.PacketType, p.SequenceNum, p.FragmentID)
 		})
 		if ok {
+			if p.isControlCounted.CompareAndSwap(true, false) {
+				s.controlCount.Add(-1)
+			}
 			s.ReleaseTXPacket(p)
 			removedAny = true
 		}
@@ -314,6 +333,9 @@ func (s *Stream_client) RemoveQueuedDataNack(sequenceNum uint16) bool {
 		return false
 	}
 
+	if p.isControlCounted.CompareAndSwap(true, false) {
+		s.controlCount.Add(-1)
+	}
 	s.ReleaseTXPacket(p)
 	return true
 }
@@ -328,6 +350,7 @@ func (s *Stream_client) cleanupResources() {
 			s.ReleaseTXPacket(p)
 		})
 	}
+	s.controlCount.Store(0)
 
 	s.PendingInboundData = nil
 	s.SetStatus(streamStatusClosed)
@@ -407,6 +430,7 @@ func (s *Stream_client) ReleaseTXPacket(p *clientStreamTXPacket) {
 	}
 	p.Payload = nil // Clear payload reference
 	p.TTL = 0
+	p.isControlCounted.Store(false)
 	txPacketPool.Put(p)
 }
 

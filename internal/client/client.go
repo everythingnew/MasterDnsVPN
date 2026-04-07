@@ -136,19 +136,20 @@ type Client struct {
 
 // clientStreamTXPacket represents a queued packet pending transmission or retransmission.
 type clientStreamTXPacket struct {
-	PacketType      uint8
-	SequenceNum     uint16
-	FragmentID      uint8
-	TotalFragments  uint8
-	CompressionType uint8
-	Payload         []byte
-	CreatedAt       time.Time
-	TTL             time.Duration
-	LastSentAt      time.Time
-	RetryDelay      time.Duration
-	RetryAt         time.Time
-	RetryCount      int
-	Scheduled       bool
+	PacketType       uint8
+	SequenceNum      uint16
+	FragmentID       uint8
+	TotalFragments   uint8
+	CompressionType  uint8
+	Payload          []byte
+	CreatedAt        time.Time
+	TTL              time.Duration
+	LastSentAt       time.Time
+	RetryDelay       time.Duration
+	RetryAt          time.Time
+	RetryCount       int
+	Scheduled        bool
+	isControlCounted atomic.Bool
 }
 
 // plannerTask is the handoff between dispatcher and the planner/encoder stage.

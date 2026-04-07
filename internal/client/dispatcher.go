@@ -256,7 +256,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 			payload = VpnProto.AppendPackedControlBlock(payload, item.PacketType, selectedStreamID, item.SequenceNum, item.FragmentID, item.TotalFragments)
 			blocks := 1
 
-			if selected != nil {
+			if selected != nil && selected.controlCount.Load() > 0 {
 				for blocks < maxBlocks {
 					popped, poppedOK := selected.txQueue.PopAnyIf(2, func(p *clientStreamTXPacket) bool {
 						return VpnProto.IsPackableControlPacket(p.PacketType, len(p.Payload))
@@ -312,7 +312,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 					}
 
 					otherStream := streams[uint16(otherID)]
-					if otherStream == nil || otherStream.txQueue == nil {
+					if otherStream == nil || otherStream.txQueue == nil || otherStream.controlCount.Load() <= 0 {
 						continue
 					}
 					for blocks < maxBlocks {
