@@ -1127,13 +1127,14 @@ func (a *ARQ) ioLoop() {
 			resetRequired = true
 			break
 		}
+		localConn := a.localConn
 		a.mu.Unlock()
 
-		if c, ok := a.localConn.(interface{ SetReadDeadline(time.Time) error }); ok {
+		if c, ok := localConn.(interface{ SetReadDeadline(time.Time) error }); ok {
 			_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		}
 
-		n, err := a.localConn.Read(buf)
+		n, err := localConn.Read(buf)
 		if n > 0 {
 			transientReadSince = time.Time{}
 			raw := append([]byte(nil), buf[:n]...)
